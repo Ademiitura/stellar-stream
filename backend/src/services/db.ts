@@ -133,6 +133,10 @@ function migrate(): void {
       content=streams,
       content_rowid=rowid
     );
+
+    CREATE TABLE IF NOT EXISTS allowed_assets (
+      code TEXT PRIMARY KEY
+    );
   `);
 
   // Incremental migrations — safe to run on existing databases.
@@ -160,6 +164,26 @@ function migrate(): void {
   } catch {
     // FTS table may not exist or rebuild may not be needed; continue
   }
+
+  // Seed allowed_assets if empty (or clear and re-seed in test env to support stubbing env)
+  if (process.env.NODE_ENV === "test") {
+    db.exec("DELETE FROM allowed_assets");
+  }
+  const count = db.prepare("SELECT COUNT(*) as count FROM allowed_assets").get() as { count: number };
+  if (count.count === 0) {
+    const initialAssets = (process.env.ALLOWED_ASSETS || "USDC,XLM")
+      .split(",")
+      .map((asset) => asset.trim().toUpperCase())
+      .filter((asset) => asset.length > 0);
+    
+    const insert = db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)");
+    const transaction = db.transaction((assets: string[]) => {
+      for (const asset of assets) {
+        insert.run(asset);
+      }
+    });
+    transaction(initialAssets);
+  }
 }
 
 export function syncFtsIndex(streamId: string, sender: string, recipient: string, assetCode: string): void {
@@ -186,4 +210,21 @@ export function searchStreamsFts(query: string): string[] {
   } catch {
     return [];
   }
+}
+
+export function getAllowedAssets(): string[] {
+  try {
+    const rows = db.prepare("SELECT code FROM allowed_assets").all() as Array<{ code: string }>;
+    return rows.map((r) => r.code);
+  } catch {
+    return [];
+  }
+}
+
+export function addAllowedAsset(code: string): void {
+  db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)").run(code.trim().toUpperCase());
+}
+
+export function removeAllowedAsset(code: string): void {
+  db.prepare("DELETE FROM allowed_assets WHERE code = ?").run(code.trim().toUpperCase());
 }
