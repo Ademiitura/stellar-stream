@@ -13,7 +13,7 @@ For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
 
-## 1) What The Project Does
+1) What The Project Does
 
 StellarStream models a payment stream where a sender allocates a total amount over a fixed duration.
 As time passes, the recipient "vests" value continuously.
@@ -25,7 +25,7 @@ As time passes, the recipient "vests" value continuously.
 * Show computed metrics (active/completed/vested)
 * Track and display event history for stream lifecycle actions
 
-## 2) Current Architecture
+2) Current Architecture
 
 ### Frontend (`frontend`, port 3000)
 * React + Vite app
@@ -53,21 +53,102 @@ As time passes, the recipient "vests" value continuously.
 #### On-Chain Event Pipeline
 The following sequence diagram shows how events flow from the Soroban contract through the indexing pipeline to the frontend:
 
+```mermaid
+sequenceDiagram
+    participant User
+    participant Contract as Soroban Contract
+    participant Indexer as Indexer Worker
+    participant SQLite as SQLite Database
+    participant API as Backend API
+    participant Frontend as React Frontend
 
+    User->>Contract: create_stream()
+    Contract->>Contract: Transfer tokens (escrow)
+    Contract->>Contract: Store stream state
+    Contract-->>Stellar: Publish StreamCreated/Claimed/Canceled events
+    loop Poll every 10s
+        Indexer->>Stellar RPC: Fetch new events
+        Stellar RPC-->>Indexer: Stream events (Created, Claimed, Canceled)
+        Indexer->>SQLite: Write stream + event(s)
+    end
+    Frontend->>API: GET /api/streams
+    API->>SQLite: Query streams
+    SQLite-->>API: Return stream data
+    API-->>Frontend: JSON response
+    Frontend->>Frontend: Render timeline
+    Frontend->>API: GET /api/streams/:id/history
+    API->>SQLite: Query stream_events
+    SQLite-->>API: Event history
+    API-->>Frontend: Event timeline JSON
 
-#### Webhook Delivery Pipeline
+Webhook Delivery Pipeline
 Events from the stream lifecycle are also delivered via HTTP webhooks with retry and dead-letter handling:
 
+sequenceDiagram
+    participant Stream as Stream Event
+    participant Worker as Webhook Worker
+    participant HTTP as HTTP Delivery
+    participant Target as Webhook Target
+    participant DLQ as Dead Letter Queue (webhook_dead_letters)
 
+    Stream->>Worker: Event detected (created/claimed/canceled)
+    Worker->>SQLite: Queue webhook delivery (status='pending')
+    loop Retry with fixed delays [5s, 15s, 60s, 300s, 900s]
+        Worker->>HTTP: POST payload (application/json)
+        HTTP->>Target: Deliver webhook
+        Note right of HTTP: Header: X-Webhook-Signature: sha256=<hmac>
+        Target-->>HTTP: 200 OK (success)
+        HTTP-->>Worker: Success
+        Worker->>SQLite: Update status='success'
+        alt Failure (timeout/error/5xx)
+            Target-->>HTTP: Error
+            HTTP-->>Worker: Failure
+            Worker->>SQLite: Schedule retry (next_retry_at)
+        end
+        SQLite->>Worker: next_retry_at
+    end
+    alt Max retries exceeded
+        Worker->>DLQ: INSERT into webhook_dead_letters
+        Worker->>SQLite: DELETE from webhook_deliveries
+        Worker->>Logs: Error logged
+    end
 
-#### Claim Flow Pipeline
+Claim Flow Pipeline
 The following diagram details the full claim lifecycle, from UI interaction to on-chain execution and backend reconciliation:
 
+sequenceDiagram
+    participant Recipient as Recipient (User)
+    participant Frontend as React Frontend
+    participant Freighter as Freighter Wallet
+    participant Contract as Soroban Contract
+    participant Indexer as Indexer Worker
+    participant SQLite as SQLite Database
+    participant API as Backend API
 
+    Recipient->>Frontend: Click "Claim"
+    Frontend->>API: GET /api/streams/:id (query claimable)
+    API-->>Frontend: Return claimable amount
+    Frontend->>Freighter: Request signature for claim(streamId, amount)
+    Freighter->>Recipient: Prompt for approval
+    Recipient-->>Freighter: Approve transaction
+    Freighter-->>Frontend: Signed Transaction
+    Frontend->>Contract: Submit claim() transaction
+    Contract->>Contract: Verify recipient & amount
+    Contract->>Contract: Transfer tokens from escrow
+    Contract-->>Stellar: Publish Claimed event
+    loop Poll every 10s
+        Indexer->>Stellar RPC: Fetch new events
+        Stellar RPC-->>Indexer: Claimed event
+        Indexer->>SQLite: Update stream (amount claimed)
+        Indexer->>SQLite: Record claim event
+    end
+    Frontend->>API: GET /api/streams/:id/history (poll)
+    API->>SQLite: Query stream_events
+    SQLite-->>API: Return updated history
+    API-->>Frontend: Return updated history
+    Frontend->>Recipient: Show "Claimed ✓"
 
----
-
-## 3) Stream Math Model
+3) Stream Math Model
 
 For each stream defined by a total amount ($A_{total}$), a start timestamp ($t_{start}$), and a duration in seconds ($d$), the completion timestamp ($t_{end}$) is calculated as:
 
@@ -83,56 +164,79 @@ $$A_{vested} = A_{total} \times R$$
 
 $$A_{remaining} = A_{total} - A_{vested}$$
 
-### Status Rules
-* **scheduled:** when $t < t_{start}$
-* **active:** when $t_{start} \le t < t_{end}$
-* **completed:** when $t \ge t_{end}$
-* **canceled:** when the stream was explicitly terminated early
+Status Rules
 
----
+scheduled: when $t < t_{start}$
 
-## 4) API Reference
+active: when $t_{start} \le t < t_{end}$
 
+completed: when $t \ge t_{end}$
+
+canceled: when the stream was explicitly terminated early
+
+4) API Reference
 Interactive API documentation is available via Swagger UI at:
-* **Swagger UI:** `/api/docs`
-* **Raw OpenAPI spec:** `/api/docs/openapi.json`
 
-**Base URL:**
-* Local: `http://localhost:3001`
-* Frontend proxy: `/api`
+Swagger UI: /api/docs
 
-### `GET /api/health`
-* **Purpose:** Service health check
-* **Response:** `service`, `status`, `timestamp`
-* **Docker Compose Health Check Configuration:**
-  * Interval: 30s
-  * Timeout: 10s
-  * Retries: 3
-  * Start Period: 10s
+Raw OpenAPI spec: /api/docs/openapi.json
 
-### `GET /api/streams`
-* **Purpose:** List streams sorted by newest first, with optional filtering and pagination
-* **Query params (optional):**
-  * `status`: `scheduled` | `active` | `completed` | `canceled`
-  * `sender`: string (exact sender match)
-  * `recipient`: string (exact recipient match)
-  * `asset`: string (exact asset code match)
-  * `q`: string (general search term - searches stream ID, sender, recipient, and asset code, case-insensitive)
-  * `page`: number (integer >= 1)
-  * `limit`: number (integer 1..100)
-* **Search behavior:** The `q` parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored.
-* **Pagination behavior:** If both `page` and `limit` are omitted, legacy mode applies and all matching rows are returned. If either `page` or `limit` is provided, pagination mode applies with defaults `page=1` and `limit=20`.
-* **Validation:** Invalid status, page, or limit returns `400`.
-* **Response:**
-  ```json
-  {
-    "data": "Stream[]",
-    "total": "number",
-    "page": "number",
-    "limit": "number"
-  }
+Base URL:
 
-  GET /api/streams/:id
+Local: http://localhost:3001
+
+Frontend proxy: /api
+
+GET /api/health
+Purpose: Service health check
+
+Response: service, status, timestamp
+
+Docker Compose Health Check Configuration:
+
+Interval: 30s
+
+Timeout: 10s
+
+Retries: 3
+
+Start Period: 10s
+
+GET /api/streams
+Purpose: List streams sorted by newest first, with optional filtering and pagination
+
+Query params (optional):
+
+status: scheduled | active | completed | canceled
+
+sender: string (exact sender match)
+
+recipient: string (exact recipient match)
+
+asset: string (exact asset code match)
+
+q: string (general search term - searches stream ID, sender, recipient, and asset code, case-insensitive)
+
+page: number (integer >= 1)
+
+limit: number (integer 1..100)
+
+Search behavior: The q parameter performs case-insensitive partial matching across stream ID, sender, recipient, and asset code. Search combines with other filters (all filters are applied together). Empty or whitespace-only search terms are ignored.
+
+Pagination behavior: If both page and limit are omitted, legacy mode applies and all matching rows are returned. If either page or limit is provided, pagination mode applies with defaults page=1 and limit=20.
+
+Validation: Invalid status, page, or limit returns 400.
+
+Response:
+
+{
+  "data": "Stream[]",
+  "total": "number",
+  "page": "number",
+  "limit": "number"
+}
+
+GET /api/streams/:id
 Purpose: Fetch single stream by ID
 
 Response: { "data": Stream }
@@ -161,6 +265,7 @@ POST /api/streams
 Purpose: Create a new stream
 
 Request JSON:
+
 {
   "sender": "string",
   "recipient": "string",
@@ -172,7 +277,7 @@ Request JSON:
 
 Validation: Sender/recipient must be non-trivial strings. Asset length must be 2..12. Amount must be positive. Duration must be at least 60 seconds.
 
-Response: 210 Created with { "data": Stream }
+Response: 201 Created with { "data": Stream }
 
 POST /api/streams/:id/cancel
 Purpose: Cancel an existing stream
@@ -228,13 +333,13 @@ Optional for contract work: Rust + Soroban toolchain
 
 Option A: Direct npm (Recommended for Development)
 From repo root:
+
 npm run install:all
 npm run dev:backend
 npm run dev:frontend
 
 Manual alternative:
 
-Bash
 cd backend && npm install && npm run dev
 cd frontend && npm install && npm run dev
 
@@ -353,7 +458,6 @@ def verify_webhook(secret: str, raw_body: bytes, signature_header: str) -> bool:
     expected_digest = expected_hmac.hexdigest()
     
     return hmac.compare_digest(expected_digest, received_digest)
-
 
 ⚠️ If WEBHOOK_DESTINATION_URL is set without a WEBHOOK_SIGNING_SECRET, webhooks will be delivered unsigned and a security warning will be logged at server initialization.
 
