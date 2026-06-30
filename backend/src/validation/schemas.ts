@@ -46,7 +46,7 @@ export const totalAmountSchema = z.coerce
 export const durationSecondsSchema = z.coerce
   .number()
   .int("durationSeconds must be a whole number of seconds.")
-  .min(1, "durationSeconds must be at least 1 second.");
+  .min(60, "durationSeconds must be at least 60 seconds.");
 
 export const unixTimestampSchema = z.coerce
   .number()
