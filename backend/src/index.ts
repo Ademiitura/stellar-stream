@@ -137,7 +137,7 @@ const authChallengeLimiter = rateLimit({
   max: AUTH_CHALLENGE_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: any) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -150,7 +150,7 @@ const authChallengeLimiter = rateLimit({
 });
 
 // Rate limiters for read and mutation endpoints
-const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 120);
+const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 5000);
 const MUTATION_RATE_LIMIT = Number(process.env.MUTATION_RATE_LIMIT ?? 10);
 
 const readLimiter = rateLimit({
@@ -514,6 +514,11 @@ app.get("/api/recipients/:accountId/streams", readLimiter, (req: Request, res: R
   if (query.asset) {
     data = data.filter(
       (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+    );
+  }
+  if (query.assetCode && query.assetCode.length > 0) {
+    data = data.filter((stream) =>
+      query.assetCode!.includes(stream.assetCode.toUpperCase()),
     );
   }
   if (query.q && query.q.length > 0) {

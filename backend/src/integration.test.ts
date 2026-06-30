@@ -550,6 +550,70 @@ describe("Backend Integration Tests", () => {
     });
 
     describe("GET /api/recipients/:accountId/streams", () => {
+      it("should filter recipient streams by status", async () => {
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ status: "scheduled" });
+        expect(response.status).toBe(200);
+        // The stream we inserted is scheduled by default (startAt in future)
+        expect(response.body.data[0].progress.status).toBe("scheduled");
+      });
+
+      it("should filter recipient streams by sender", async () => {
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ sender: mockStream.sender });
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].sender).toBe(mockStream.sender);
+      });
+
+      it("should filter recipient streams by asset", async () => {
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ asset: mockStream.assetCode });
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].assetCode).toBe(mockStream.assetCode);
+      });
+
+      it("should filter recipient streams by assetCode (single)", async () => {
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ assetCode: mockStream.assetCode });
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].assetCode).toBe(mockStream.assetCode);
+      });
+
+      it("should filter recipient streams by assetCode (multiple, case-insensitive)", async () => {
+        // Insert an additional stream with different asset for same recipient
+        const db = getDb();
+        const otherStream = { ...mockStream, id: "2", assetCode: "XLM" };
+        db.prepare(`
+          INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+          VALUES (@id, @sender, @recipient, @assetCode, @totalAmount, @durationSeconds, @startAt, @createdAt)
+        `).run(otherStream);
+
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ assetCode: `${mockStream.assetCode},XLM` });
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(2);
+        const codes = response.body.data.map((s: any) => s.assetCode);
+        expect(codes).toContain(mockStream.assetCode);
+        expect(codes).toContain("XLM");
+      });
+
+      it("should filter recipient streams by q search", async () => {
+        const response = await request(app)
+          .get(`/api/recipients/${mockStream.recipient}/streams`)
+          .query({ q: mockStream.sender.substring(0, 5) });
+        expect(response.status).toBe(200);
+        expect(response.body.data).toHaveLength(1);
+        expect(response.body.data[0].sender).toBe(mockStream.sender);
+      });
+
       it("should get streams for a recipient", async () => {
         const response = await request(app)
           .get(`/api/recipients/${mockStream.recipient}/streams`);
