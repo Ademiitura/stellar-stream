@@ -3,6 +3,8 @@ import { listRecipientStreams, StreamEvent } from "../services/api";
 import { Stream } from "../types/stream";
 import { CopyableAddress } from "./CopyableAddress";
 import { useClaimStream, ClaimState } from "../hooks/useClaimStream";
+import { useClaimBatch, type BatchClaimInput } from "../hooks/useClaimBatch";
+import { ClaimBatchModal } from "./ClaimBatchModal";
 import { ClaimResult } from "../services/soroban";
 
 interface RecipientDashboardProps {
@@ -113,6 +115,8 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [pendingBatchInputs, setPendingBatchInputs] = useState<BatchClaimInput[]>([]);
 
   // Auto-dismiss toast after 5 s
   useEffect(() => {
@@ -148,6 +152,25 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     },
     [refreshStreams],
   );
+
+  const handleBatchClaimSuccess = useCallback(
+    async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
+      await refreshStreams();
+      setToast({
+        message: `Successfully claimed ${result.claimedAmount} from stream ${streamId}.`,
+        type: "success",
+      });
+    },
+    [refreshStreams],
+  );
+
+  const {
+    state: batchState,
+    fetchClaimable,
+    executeBatch,
+    reset: resetBatch,
+    isClaiming: isBatchClaiming,
+  } = useClaimBatch(handleBatchClaimSuccess);
 
   const handleClaimFailure = useCallback((_streamId: string, message: string) => {
     setToast({ message, type: "error" });
@@ -277,6 +300,28 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         />
       )}
 
+      {batchModalOpen && (
+        <ClaimBatchModal
+          state={batchState}
+          streamCount={pendingBatchInputs.length}
+          onConfirm={async () => {
+            if (!recipientAddress) return;
+            const claimable = pendingBatchInputs
+              .map((input) => ({
+                ...input,
+                amount: batchState.claimableByStreamId[input.streamId] ?? 0,
+              }))
+              .filter((input) => input.amount > 0);
+            await executeBatch(claimable, recipientAddress);
+          }}
+          onClose={() => {
+            setBatchModalOpen(false);
+            resetBatch();
+            setPendingBatchInputs([]);
+          }}
+        />
+      )}
+
       <div className="card recipient-dashboard-card">
         <h2 className="recipient-dashboard-title">Recipient Dashboard</h2>
         <p className="muted recipient-dashboard-subtitle">
@@ -304,7 +349,48 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
 
         {activeStreams.length > 0 && (
           <section className="recipient-dashboard-section">
-            <h3 className="recipient-dashboard-section-title">Active streams</h3>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <h3 className="recipient-dashboard-section-title" style={{ margin: 0 }}>
+                Active streams
+              </h3>
+              {activeStreams.length > 1 && recipientAddress && (
+                <button
+                  type="button"
+                  className="btn-claim"
+                  disabled={isPending || isBatchClaiming}
+                  onClick={async () => {
+                    const inputs: BatchClaimInput[] = activeStreams.map((s) => ({
+                      streamId: s.id,
+                      amount: s.progress.vestedAmount,
+                      assetCode: s.assetCode,
+                    }));
+                    setPendingBatchInputs(inputs);
+                    setBatchModalOpen(true);
+                    try {
+                      await fetchClaimable(inputs);
+                    } catch (err) {
+                      setBatchModalOpen(false);
+                      setToast({
+                        message:
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to load claimable amounts.",
+                        type: "error",
+                      });
+                    }
+                  }}
+                >
+                  Claim all
+                </button>
+              )}
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -414,10 +500,12 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         )}
 
         {/* Global pending indicator — shown when any claim is in-flight */}
-        {isPending && (
+        {(isPending || isBatchClaiming) && (
           <div className="claim-pending-banner" role="status" aria-live="polite">
             <span className="btn-claim__spinner" aria-hidden="true" />
-            Waiting for on-chain confirmation…
+            {isBatchClaiming && batchState.progress.total > 0
+              ? `Claiming ${batchState.progress.current} of ${batchState.progress.total}…`
+              : "Waiting for on-chain confirmation…"}
           </div>
         )}
       </div>

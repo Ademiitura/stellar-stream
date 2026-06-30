@@ -4,9 +4,9 @@ import { validateEnv } from "./validateEnv";
 describe("validateEnv", () => {
   const originalEnv = process.env;
   const exitSpy = vi.spyOn(process, "exit").mockImplementation(() => undefined as never);
-  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => {});
-  const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => {});
-  const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => {});
+  const consoleErrorSpy = vi.spyOn(console, "error").mockImplementation(() => { });
+  const consoleWarnSpy = vi.spyOn(console, "warn").mockImplementation(() => { });
+  const consoleLogSpy = vi.spyOn(console, "log").mockImplementation(() => { });
 
   beforeEach(() => {
     process.env = { ...originalEnv };
@@ -28,7 +28,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -43,7 +43,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -59,7 +59,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -78,7 +78,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -99,7 +99,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -115,7 +115,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -149,7 +149,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
     });
@@ -348,7 +348,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -364,7 +364,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -404,6 +404,8 @@ describe("validateEnv", () => {
       expect(config).toHaveProperty("serverSigningKey");
       expect(config).toHaveProperty("domain");
       expect(config).toHaveProperty("indexerPollIntervalMs");
+      expect(config).toHaveProperty("reconciliationIntervalMs");
+      expect(config).toHaveProperty("adminApiKey");
     });
 
     it("should use default INDEXER_POLL_INTERVAL_MS of 10000ms", () => {
@@ -435,7 +437,7 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
@@ -451,12 +453,148 @@ describe("validateEnv", () => {
 
       try {
         validateEnv();
-      } catch (e) {}
+      } catch (e) { }
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
         expect.stringContaining("INDEXER_POLL_INTERVAL_MS: must be a valid number >= 5000")
       );
     });
+
+    it("should use default RECONCILIATION_INTERVAL_MS of 60000ms", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+      };
+
+      const config = validateEnv();
+
+      expect(config.reconciliationIntervalMs).toBe(60000);
+    });
+
+    it("should accept valid RECONCILIATION_INTERVAL_MS", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        RECONCILIATION_INTERVAL_MS: "120000",
+      };
+
+      const config = validateEnv();
+
+      expect(config.reconciliationIntervalMs).toBe(120000);
+    });
+
+    it("should enforce minimum RECONCILIATION_INTERVAL_MS of 10000ms", () => {
+      process.env = {
+        SOROBAN_DISABLED: "true",
+        RECONCILIATION_INTERVAL_MS: "5000",
+      };
+
+      try {
+        validateEnv();
+      } catch (e) { }
+
+      expect(exitSpy).toHaveBeenCalledWith(1);
+      expect(consoleErrorSpy).toHaveBeenCalledWith(
+        expect.stringContaining("RECONCILIATION_INTERVAL_MS: must be a valid number >= 10000")
+      );
+    });
+  });
+});
+
+describe("ADMIN_API_KEY validation", () => {
+  it("should accept ADMIN_API_KEY with 32+ characters", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      ADMIN_API_KEY: "a".repeat(32),
+    };
+
+    const config = validateEnv();
+
+    expect(config.adminApiKey).toBe("a".repeat(32));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("should accept ADMIN_API_KEY with more than 32 characters", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      ADMIN_API_KEY: "a".repeat(64),
+    };
+
+    const config = validateEnv();
+
+    expect(config.adminApiKey).toBe("a".repeat(64));
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("should reject ADMIN_API_KEY with less than 32 characters in production", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      ADMIN_API_KEY: "short-key",
+      NODE_ENV: "production",
+    };
+
+    try {
+      validateEnv();
+    } catch (e) { }
+
+    expect(exitSpy).toHaveBeenCalledWith(1);
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("ADMIN_API_KEY validation failed")
+    );
+    expect(consoleErrorSpy).toHaveBeenCalledWith(
+      expect.stringContaining("must be at least 32 characters")
+    );
+  });
+
+  it("should warn but allow short ADMIN_API_KEY in development", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      ADMIN_API_KEY: "short-key",
+      NODE_ENV: "development",
+    };
+
+    const config = validateEnv();
+
+    expect(config.adminApiKey).toBe("short-key");
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("In development, short keys are allowed")
+    );
+    expect(exitSpy).not.toHaveBeenCalled();
+  });
+
+  it("should return null adminApiKey when not provided", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+    };
+
+    const config = validateEnv();
+
+    expect(config.adminApiKey).toBeNull();
+  });
+
+  it("should warn when ADMIN_API_KEY not set in production", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      NODE_ENV: "production",
+    };
+
+    validateEnv();
+
+    expect(consoleWarnSpy).toHaveBeenCalledWith(
+      expect.stringContaining("ADMIN_API_KEY is not set in production")
+    );
+  });
+
+  it("should not warn when ADMIN_API_KEY not set in development", () => {
+    process.env = {
+      SOROBAN_DISABLED: "true",
+      NODE_ENV: "development",
+    };
+
+    validateEnv();
+
+    const warnCalls = consoleWarnSpy.mock.calls.filter((call) =>
+      call[0]?.toString().includes("ADMIN_API_KEY is not set")
+    );
+    expect(warnCalls).toHaveLength(0);
   });
 });

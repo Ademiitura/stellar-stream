@@ -1,5 +1,5 @@
 import React from "react";
-import { render, screen, fireEvent, waitFor, cleanup } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, cleanup, renderHook } from "@testing-library/react";
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { FilterBar } from "./FilterBar";
 import { ListStreamsFilters } from "../services/api";
@@ -31,7 +31,7 @@ describe("FilterBar Component", () => {
     const handleChange = vi.fn();
     render(<FilterBar filters={mockFilters} onChange={handleChange} />);
     
-    const scheduledBtn = screen.getByText(/Scheduled/i);
+    const scheduledBtn = screen.getByRole("button", { name: /Scheduled/i });
     fireEvent.click(scheduledBtn);
     
     expect(handleChange).toHaveBeenCalledWith({
@@ -47,7 +47,7 @@ describe("FilterBar Component", () => {
     const handleChange = vi.fn();
     render(<FilterBar filters={mockFilters} onChange={handleChange} />);
     
-    const atRiskBtn = screen.getByText(/At-Risk/i);
+    const atRiskBtn = screen.getByRole("button", { name: /At-Risk/i });
     fireEvent.click(atRiskBtn);
     
     expect(handleChange).toHaveBeenCalledWith({
@@ -110,7 +110,7 @@ describe("FilterBar URL Sync Integration", () => {
     vi.clearAllMocks();
   });
 
-  it("updates URL query param when status filter is changed to 'active'", () => {
+  it("updates URL query param when status filter is changed to 'active' with useUrlFilters enabled", () => {
     const handleChange = vi.fn();
     const mockFilters: ListStreamsFilters = {
       status: "",
@@ -120,7 +120,27 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={mockFilters} onChange={handleChange} />);
+    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
+
+    const statusSelect = screen.getByLabelText(/Status/i);
+    fireEvent.change(statusSelect, { target: { value: "active" } });
+
+    expect(handleChange).toHaveBeenCalledWith(
+      expect.objectContaining({ status: "active", page: 1 })
+    );
+  });
+
+  it("does not update URL when useUrlFilters is disabled", () => {
+    const handleChange = vi.fn();
+    const mockFilters: ListStreamsFilters = {
+      status: "",
+      q: "",
+      asset: "",
+      sender: "",
+      recipient: "",
+    };
+
+    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={false} />);
 
     const statusSelect = screen.getByLabelText(/Status/i);
     fireEvent.change(statusSelect, { target: { value: "active" } });
@@ -128,26 +148,32 @@ describe("FilterBar URL Sync Integration", () => {
     expect(handleChange).toHaveBeenCalledWith(
       expect.objectContaining({ status: "active" })
     );
+    expect(handleChange).toHaveBeenCalledWith(
+      expect.not.objectContaining({ page: 1 })
+    );
   });
 
-  it("restores filter state from URL on page load with ?status=completed", () => {
-    (window as any).location.search = "?status=completed";
+  it("updates asset param when asset filter changes with useUrlFilters enabled", () => {
+    const handleChange = vi.fn();
+    const mockFilters: ListStreamsFilters = {
+      status: "",
+      q: "",
+      asset: "",
+      sender: "",
+      recipient: "",
+    };
 
-    const { filters } = useUrlFilters();
+    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
 
-    expect(filters.status).toBe("completed");
+    const assetInput = screen.getByLabelText(/Asset Code/i);
+    fireEvent.change(assetInput, { target: { value: "USDC", name: "asset" } });
+
+    expect(handleChange).toHaveBeenCalledWith(
+      expect.objectContaining({ asset: "USDC", page: 1 })
+    );
   });
 
-  it("restores filter state from URL with multiple params", () => {
-    (window as any).location.search = "?status=active&asset=USDC";
-
-    const { filters } = useUrlFilters();
-
-    expect(filters.status).toBe("active");
-    expect(filters.asset).toBe("USDC");
-  });
-
-  it("clears URL params when all filters are reset", () => {
+  it("resets to page 1 when Reset button is clicked with useUrlFilters enabled", () => {
     const handleChange = vi.fn();
     const activeFilters: ListStreamsFilters = {
       status: "active",
@@ -157,7 +183,7 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={activeFilters} onChange={handleChange} />);
+    render(<FilterBar filters={activeFilters} onChange={handleChange} useUrlFilters={true} />);
 
     const resetBtn = screen.getByText(/Reset All/i);
     fireEvent.click(resetBtn);
@@ -168,7 +194,25 @@ describe("FilterBar URL Sync Integration", () => {
       asset: "",
       sender: "",
       recipient: "",
+      page: 1,
     });
+  });
+
+  it("restores filter state from URL on page load with ?status=completed", () => {
+    (window as any).location.search = "?status=completed";
+
+    const { result } = renderHook(() => useUrlFilters());
+
+    expect(result.current.filters.status).toBe("completed");
+  });
+
+  it("restores filter state from URL with multiple params", () => {
+    (window as any).location.search = "?status=active&asset=USDC";
+
+    const { result } = renderHook(() => useUrlFilters());
+
+    expect(result.current.filters.status).toBe("active");
+    expect(result.current.filters.asset).toBe("USDC");
   });
 
   it("updates q param when search input has 3+ characters", () => {
@@ -181,52 +225,32 @@ describe("FilterBar URL Sync Integration", () => {
       recipient: "",
     };
 
-    render(<FilterBar filters={mockFilters} onChange={handleChange} />);
+    render(<FilterBar filters={mockFilters} onChange={handleChange} useUrlFilters={true} />);
 
     const searchInput = screen.getByLabelText(/Search ID \/ Address/i);
     fireEvent.change(searchInput, { target: { value: "abc", name: "q" } });
 
     expect(handleChange).toHaveBeenCalledWith(
-      expect.objectContaining({ q: "abc" })
-    );
-  });
-
-  it("updates q param when search input has more than 3 characters", () => {
-    const handleChange = vi.fn();
-    const mockFilters: ListStreamsFilters = {
-      status: "",
-      q: "",
-      asset: "",
-      sender: "",
-      recipient: "",
-    };
-
-    render(<FilterBar filters={mockFilters} onChange={handleChange} />);
-
-    const searchInput = screen.getByLabelText(/Search ID \/ Address/i);
-    fireEvent.change(searchInput, { target: { value: "test-id-123", name: "q" } });
-
-    expect(handleChange).toHaveBeenCalledWith(
-      expect.objectContaining({ q: "test-id-123" })
+      expect.objectContaining({ q: "abc", page: 1 })
     );
   });
 
   it("handles invalid status values in URL by defaulting to empty", () => {
     (window as any).location.search = "?status=invalid";
 
-    const { filters } = useUrlFilters();
+    const { result } = renderHook(() => useUrlFilters());
 
-    expect(filters.status).toBe("");
+    expect(result.current.filters.status).toBe("");
   });
 
   it("handles empty URL params correctly", () => {
     (window as any).location.search = "";
 
-    const { filters } = useUrlFilters();
+    const { result } = renderHook(() => useUrlFilters());
 
-    expect(filters.status).toBe("");
-    expect(filters.asset).toBe("");
-    expect(filters.sender).toBe("");
-    expect(filters.recipient).toBe("");
+    expect(result.current.filters.status).toBe("");
+    expect(result.current.filters.asset).toBe("");
+    expect(result.current.filters.sender).toBe("");
+    expect(result.current.filters.recipient).toBe("");
   });
 });

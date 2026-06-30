@@ -8,10 +8,14 @@
  * builds, signs (fee-sponsored), and submits the Soroban `claim` transaction
  * on behalf of the recipient.  The backend returns the claimed amount and the
  * updated event history.
+ *
+ * To use the generated contract client directly (for read operations or
+ * wallet-signed transactions), import from `./contractClient`.
  */
 
 import { getAuthToken } from "./api";
 import type { StreamEvent } from "./api";
+import { CONTRACT_ID, RPC_URL, NETWORK_PASSPHRASE } from "./contractClient";
 
 const API_BASE = (import.meta as any).env?.VITE_API_URL ?? "/api";
 
@@ -76,5 +80,44 @@ export async function claimOnChain(
   }
 
   return response.json() as Promise<ClaimResponse>;
+}
+
+export const claimStream = claimOnChain;
+
+export interface ClaimableBatchResponse {
+  amounts: Record<string, number>;
+  at: number;
+}
+
+/**
+ * Simulate on-chain claimable amounts for multiple streams via get_claimable_batch.
+ * Maximum 20 stream IDs per request (Soroban contract limit).
+ */
+export async function getClaimableBatch(
+  streamIds: string[],
+): Promise<ClaimableBatchResponse> {
+  const token = getAuthToken();
+
+  const response = await fetch(`${API_BASE}/streams/claimable/batch`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      ...(token ? { Authorization: `Bearer ${token}` } : {}),
+    },
+    body: JSON.stringify({ streamIds }),
+  });
+
+  if (!response.ok) {
+    let message = `Failed to fetch claimable batch (${response.status})`;
+    try {
+      const body = (await response.json()) as { error?: string };
+      if (body.error) message = body.error;
+    } catch {
+      // ignore JSON parse errors
+    }
+    throw new Error(message);
+  }
+
+  return response.json() as Promise<ClaimableBatchResponse>;
 }
 

@@ -7,6 +7,7 @@ import jwt from "jsonwebtoken";
 import path from "path";
 import fs from "fs";
 import { Keypair } from "@stellar/stellar-sdk";
+import { logger } from "./logger";
 
 // Use a separate test database for isolation
 const TEST_DB_PATH = path.join(__dirname, "..", "data", "test-webhooks.db");
@@ -30,6 +31,8 @@ describe("Webhook Dead Letter Integration Tests", () => {
     const db = getDb();
     db.exec("DELETE FROM webhook_dead_letters");
     db.exec("DELETE FROM webhook_deliveries");
+    db.exec("DELETE FROM stream_events");
+    db.exec("DELETE FROM streams");
   });
 
   afterAll(() => {
@@ -41,7 +44,7 @@ describe("Webhook Dead Letter Integration Tests", () => {
       try {
         fs.unlinkSync(TEST_DB_PATH);
       } catch (err) {
-        console.error("Failed to delete test DB file:", err);
+        logger.error({ err, path: TEST_DB_PATH }, "failed to delete test DB file");
       }
     }
   });
@@ -126,6 +129,12 @@ describe("Webhook Dead Letter Integration Tests", () => {
   describe("POST /api/webhooks/dead-letters/:id/requeue", () => {
     it("should re-queue a dead letter and remove it from dead letters table", async () => {
       const db = getDb();
+      // Insert mock stream to satisfy foreign key constraint of webhook_deliveries
+      db.prepare(`
+        INSERT INTO streams (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+      `).run("s-requeue", "GAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAWHF", "GBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBBB", "USDC", 100, 3600, 100, 100);
+
       db.prepare(`
         INSERT INTO webhook_dead_letters (stream_id, event, url, payload, last_error, failed_at)
         VALUES (?, ?, ?, ?, ?, ?)
