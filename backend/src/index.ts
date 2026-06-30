@@ -34,6 +34,7 @@ import { adminAuth } from "./middleware/adminAuth";
 import { deleteStreamById, reconcileStream } from "./services/streamStore";
 import { getCache } from "./services/cache";
 import { getStreamStats } from "./services/stats";
+import { getStreamMetrics } from "./services/streamMetrics";
 
 import { startReconciliationJob } from "./services/reconciliationJob";
 import { startArchiveJob } from "./services/archiveJob";
@@ -391,8 +392,7 @@ app.get("/api/stats", async (_req: Request, res: Response) => {
 
 const METRICS_AUTH = process.env.METRICS_AUTH?.trim() || null; // format: "user:password"
 
-app.get("/api/metrics", async (_req: Request, res: Response) => {
-  // Optional basic auth check
+app.get("/metrics", async (_req: Request, res: Response) => {
   if (METRICS_AUTH) {
     const authHeader = _req.headers.authorization;
     const expected = "Basic " + Buffer.from(METRICS_AUTH).toString("base64");
@@ -406,6 +406,19 @@ app.get("/api/metrics", async (_req: Request, res: Response) => {
   const output = await register.metrics();
   res.setHeader("Content-Type", "text/plain; version=0.0.4");
   res.send(output);
+});
+
+app.get("/api/metrics", authMiddleware, (_req: Request, res: Response) => {
+  try {
+    const metrics = getStreamMetrics();
+    res.set("Cache-Control", "max-age=60");
+    res.json({ data: metrics });
+  } catch (error) {
+    logger.error({ err: error }, "Failed to get stream metrics");
+    sendApiError(_req, res, 500, "Failed to compute metrics.", {
+      code: "INTERNAL_ERROR",
+    });
+  }
 });
 
 // GET /api/metrics/history?days=7 — daily aggregate metrics for the past N days (max 90)
