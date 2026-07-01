@@ -6,6 +6,7 @@ export const STELLAR_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
 export const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
 export const STREAM_ID_REGEX = /^[1-9]\d*$/;
 
+/** Validates whether a string is a valid Stellar Ed25519 public key using StrKey. */
 export function isStellarPublicKey(value: string): boolean {
   return StrKey.isValidEd25519PublicKey(value);
 }
@@ -72,7 +73,15 @@ export const createStreamPayloadSchema = z
       });
     }
     if (payload.startAt !== undefined) {
-      const maxFutureTimestamp = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.startAt < now + 10) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["startAt"],
+          message: "startAt must be at least 10 seconds in the future.",
+        });
+      }
+      const maxFutureTimestamp = now + 365 * 24 * 60 * 60;
       if (payload.startAt > maxFutureTimestamp) {
         ctx.addIssue({
           code: "custom",
@@ -83,6 +92,12 @@ export const createStreamPayloadSchema = z
     }
   });
 
+/**
+ * Creates a Zod schema for validating stream creation payloads, restricted to a specific
+ * set of allowed asset codes.
+ * @param allowedAssets - Array of permitted asset code strings (e.g. ["USDC", "XLM"])
+ * @returns A Zod schema that validates both payload structure and asset code
+ */
 export function createStreamPayloadWithAllowedAssetsSchema(
   allowedAssets: string[],
 ) {
@@ -102,7 +117,15 @@ export function createStreamPayloadWithAllowedAssetsSchema(
 export const updateStreamStartAtSchema = z.object({
   startAt: unixTimestampSchema,
 }).superRefine((payload, ctx) => {
-  const maxFutureTimestamp = Math.floor(Date.now() / 1000) + 365 * 24 * 60 * 60;
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.startAt < now + 10) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["startAt"],
+      message: "startAt must be at least 10 seconds in the future.",
+    });
+  }
+  const maxFutureTimestamp = now + 365 * 24 * 60 * 60;
   if (payload.startAt > maxFutureTimestamp) {
     ctx.addIssue({
       code: "custom",
@@ -208,6 +231,11 @@ export type ValidationIssue = {
   message: string;
 };
 
+/**
+ * Converts an array of Zod issues into structured validation issues with field and message.
+ * @param issues - Array of Zod validation issues
+ * @returns Array of ValidationIssue objects with field path and message
+ */
 export function zodIssuesToValidationIssues(issues: z.ZodIssue[]): ValidationIssue[] {
   return issues.map((issue) => ({
     field: issue.path.length > 0 ? issue.path.join(".") : "body",
@@ -215,6 +243,11 @@ export function zodIssuesToValidationIssues(issues: z.ZodIssue[]): ValidationIss
   }));
 }
 
+/**
+ * Converts an array of Zod issues into a single human-readable error message string.
+ * @param issues - Array of Zod validation issues
+ * @returns A semicolon-separated string of "field: message" pairs
+ */
 export function zodIssuesToErrorMessage(issues: z.ZodIssue[]): string {
   return zodIssuesToValidationIssues(issues)
     .map(({ field, message }) => `${field}: ${message}`)
