@@ -1,13 +1,14 @@
 import cors from "cors";
 import helmet from "helmet";
 import { requestLogger } from "./middleware/requestLogger";
+import { requireJsonContentType } from "./middleware/contentType";
 import "dotenv/config";
 import express, { NextFunction, Request, Response } from "express";
 import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts } from "./services/db";
+import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -23,6 +24,7 @@ import {
   getStreamHistory,
   countStreamEvents,
   getStreamEventSummary,
+  StreamEventType,
 } from "./services/eventHistory";
 import { fetchOpenIssues } from "./services/openIssues";
 import {
@@ -72,11 +74,15 @@ import {
 
 import {
   authMiddleware,
+  adminJwtAuth,
   generateChallenge,
   refreshToken,
   verifyChallengeAndIssueToken,
+  getJwtSecret,
 } from "./services/auth";
+import jwt from "jsonwebtoken";
 import {
+  bulkCancelStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
   listEventsQuerySchema,
   recipientAccountIdSchema,
@@ -179,7 +185,7 @@ const authChallengeLimiter = rateLimit({
   max: AUTH_CHALLENGE_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: any) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -192,7 +198,7 @@ const authChallengeLimiter = rateLimit({
 });
 
 // Rate limiters for read and mutation endpoints
-const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 120);
+const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 5000);
 const MUTATION_RATE_LIMIT = Number(process.env.MUTATION_RATE_LIMIT ?? 10);
 
 const readLimiter = rateLimit({
@@ -200,7 +206,7 @@ const readLimiter = rateLimit({
   max: READ_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: NextFunction) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -217,7 +223,7 @@ const mutationLimiter = rateLimit({
   max: MUTATION_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: NextFunction) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -236,7 +242,7 @@ const claimableLimiter = rateLimit({
   max: CLAIMABLE_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: NextFunction) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -258,7 +264,7 @@ const reconcileLimiter = rateLimit({
     // Use stream ID from params as the rate limit key
     return `reconcile:${req.params.id}`;
   },
-  handler: (req: Request, res: Response) => {
+  handler: (req: Request, res: Response, next: NextFunction) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -282,7 +288,6 @@ app.use(helmet({
     preload: true,
   },
 }));
-app.use(cors());
 const ALLOWED_ORIGINS = process.env.ALLOWED_ORIGINS;
 
 if (ALLOWED_ORIGINS) {
@@ -316,6 +321,7 @@ if (ALLOWED_ORIGINS) {
   app.use(cors());
 }
 app.use(requestLogger);
+app.use(requireJsonContentType);
 app.use(
   express.json({
     limit: "32kb",
@@ -408,7 +414,7 @@ app.get("/api/metrics", async (_req: Request, res: Response) => {
   res.send(output);
 });
 
-// GET /api/metrics/history?days=7 — daily aggregate metrics for the past N days (max 90)
+// GET /api/metrics/history?days=7 â€” daily aggregate metrics for the past N days (max 90)
 app.get(
   "/api/metrics/history",
   readLimiter,
@@ -447,8 +453,55 @@ app.get(
 
 app.get("/api/assets", (_req: Request, res: Response) => {
   res.json({
-    data: ALLOWED_ASSETS,
+    data: getAllowedAssets(),
   });
+});
+
+app.get("/api/admin/assets", adminJwtAuth, (_req: Request, res: Response) => {
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.post("/api/admin/assets", adminJwtAuth, (req: Request, res: Response) => {
+  const code = req.body?.code;
+  if (typeof code !== "string" || !code.trim()) {
+    sendApiError(req, res, 400, "Asset code is required.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  const cleanCode = code.trim().toUpperCase();
+  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+  if (!ASSET_CODE_REGEX.test(cleanCode)) {
+    sendApiError(req, res, 400, "Asset code must be 1–12 alphanumeric characters.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  addAllowedAsset(cleanCode);
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.delete("/api/admin/assets/:code", adminJwtAuth, (req: Request, res: Response) => {
+  const { code } = req.params;
+  if (!code) {
+    sendApiError(req, res, 400, "Asset code is required.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  const cleanCode = (code as string).trim().toUpperCase();
+  removeAllowedAsset(cleanCode);
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) => {
+  const apiKey = req.body?.apiKey || req.header("X-Admin-Key");
+  if (!apiKey || apiKey !== process.env.ADMIN_API_KEY) {
+    sendApiError(req, res, 401, "Invalid Admin API Key.", { code: "UNAUTHORIZED" });
+    return;
+  }
+  const token = jwt.sign({ role: "admin", accountId: "admin", isAdmin: true }, getJwtSecret(), { expiresIn: "24h" });
+  res.json({ token });
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
@@ -588,25 +641,27 @@ app.get("/api/events", readLimiter, (req: Request, res: Response) => {
   }
 
   const query = parsedQuery.data;
-  const hasPage = req.query.page !== undefined;
-  const hasLimit = req.query.limit !== undefined;
 
-  const eventType = query.eventType as Parameters<typeof getGlobalEvents>[2];
-  const total = countAllEvents(eventType);
+  const eventType = query.eventType as StreamEventType | undefined;
+  const streamId = query.streamId;
+  const since = query.since;
+
+  const total = countAllEvents(eventType, streamId, since);
 
   const page = query.page ?? PAGINATION_DEFAULT_PAGE;
-  const limit =
-    !hasPage && !hasLimit ? total : (query.limit ?? PAGINATION_DEFAULT_LIMIT);
+  const pageSize = query.pageSize ?? query.limit ?? PAGINATION_DEFAULT_LIMIT;
 
-  const offset = (page - 1) * limit;
+  const offset = (page - 1) * pageSize;
   const data = getGlobalEvents(
-    limit === 0 ? 0 : limit,
+    pageSize,
     offset,
     eventType,
     query.cursor,
+    streamId,
+    since,
   );
 
-  res.json({ data, total, page, limit });
+  res.json({ data, total, page, pageSize, limit: pageSize });
 });
 
 app.get(
@@ -976,12 +1031,45 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-    if (query.status) {
-      data = data.filter((stream) => stream.progress.status === query.status);
-    }
-    if (query.sender) {
-      data = data.filter(
-        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(req, res, parsedQuery.error.issues);
+    return;
+  }
+  const query = parsedQuery.data;
+
+  let data = listStreamsByRecipient(accountId)
+    .map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+  if (query.status) {
+    data = data.filter((stream) => stream.progress.status === query.status);
+  }
+  if (query.sender) {
+    data = data.filter(
+      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+    );
+  }
+  if (query.asset) {
+    data = data.filter(
+      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+    );
+  }
+  if (query.assetCode && query.assetCode.length > 0) {
+    data = data.filter((stream) =>
+      query.assetCode!.includes(stream.assetCode.toUpperCase()),
+    );
+  }
+  if (query.q && query.q.length > 0) {
+    const searchTerm = query.q.toLowerCase();
+    data = data.filter((stream) => {
+      return (
+        stream.id.toLowerCase().includes(searchTerm) ||
+        stream.sender.toLowerCase().includes(searchTerm) ||
+        stream.recipient.toLowerCase().includes(searchTerm) ||
+        stream.assetCode.toLowerCase().includes(searchTerm)
       );
     }
     if (query.asset) {
@@ -1114,7 +1202,7 @@ app.post("/api/auth/token", async (req: Request, res: Response) => {
   }
 });
 
-// POST /api/auth/refresh — accepts a valid Bearer JWT, returns a new one with fresh 24h expiry
+// POST /api/auth/refresh â€” accepts a valid Bearer JWT, returns a new one with fresh 24h expiry
 app.post("/api/auth/refresh", refreshToken);
 
 app.post(
@@ -1122,8 +1210,9 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
-      ALLOWED_ASSETS,
+      currentAllowedAssets,
     ).safeParse(req.body);
     if (!parsedBody.success) {
       sendValidationError(req, res, parsedBody.error.issues);
@@ -1157,8 +1246,9 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
-      ALLOWED_ASSETS,
+      currentAllowedAssets,
     ).safeParse(req.body);
     if (!parsedBody.success) {
       sendValidationError(req, res, parsedBody.error.issues);
@@ -1248,60 +1338,59 @@ app.post(
   },
 );
 
-// POST /api/streams/:id/mark-complete — sender marks a fully-vested stream as complete
+// POST /api/streams/bulk-cancel â€” sender cancels multiple streams
 app.post(
-  "/api/streams/:id/mark-complete",
+  "/api/streams/bulk-cancel",
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
-    const parsedId = parseStreamId(req.params.id);
-    if (!parsedId.ok) {
-      sendValidationError(req, res, parsedId.issues);
+    const parsedBody = bulkCancelStreamsSchema.safeParse(req.body);
+    if (!parsedBody.success) {
+      sendValidationError(req, res, parsedBody.error.issues);
       return;
     }
 
-    const stream = getStream(parsedId.value);
-    if (!stream) {
-      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
-      return;
-    }
-
+    const { streamIds, sender } = parsedBody.data;
     const user = (req as any).user;
-    if (stream.sender !== user.accountId) {
-      sendApiError(req, res, 403, "Only the sender can complete this stream.", {
+
+    // Verify the authenticated user matches the sender in the request body
+    if (sender !== user.accountId) {
+      sendApiError(req, res, 403, "Sender in request body does not match authenticated user.", {
         code: "FORBIDDEN",
       });
       return;
     }
 
-    try {
-      const updated = markStreamComplete(parsedId.value);
-      res.json({
-        data: {
-          ...updated,
-          progress: calculateProgress(updated),
-        },
-      });
-    } catch (error: any) {
-      logger.error({ err: error, streamId: parsedId.value }, "failed to mark stream complete");
-      const normalizedError = normalizeUnknownApiError(
-        error,
-        "Failed to mark stream complete.",
-      );
-      sendApiError(
-        req,
-        res,
-        normalizedError.statusCode,
-        normalizedError.message,
-        {
-          code: normalizedError.code ?? "INTERNAL_ERROR",
-        },
-      );
+    const canceled: string[] = [];
+    const failed: { id: string; error: string }[] = [];
+
+    // Cancel each stream serially to avoid SQLite lock contention
+    for (const streamId of streamIds) {
+      try {
+        const stream = getStream(streamId);
+        if (!stream) {
+          failed.push({ id: streamId, error: "Stream not found" });
+          continue;
+        }
+
+        if (stream.sender !== user.accountId) {
+          failed.push({ id: streamId, error: "Only the sender can cancel this stream" });
+          continue;
+        }
+
+        await cancelStream(streamId);
+        canceled.push(streamId);
+      } catch (error: any) {
+        logger.error({ err: error, streamId }, "failed to cancel stream in bulk operation");
+        failed.push({ id: streamId, error: "Failed to cancel stream" });
+      }
     }
+
+    res.json({ canceled, failed });
   },
 );
 
-// POST /api/streams/:id/pause — sender pauses an active stream
+// POST /api/streams/:id/pause â€” sender pauses an active stream
 app.post(
   "/api/streams/:id/pause",
   mutationLimiter,
@@ -1348,7 +1437,7 @@ app.post(
   },
 );
 
-// POST /api/streams/:id/resume — sender resumes a paused stream
+// POST /api/streams/:id/resume â€” sender resumes a paused stream
 app.post(
   "/api/streams/:id/resume",
   mutationLimiter,
@@ -1395,50 +1484,7 @@ app.post(
   },
 );
 
-// POST /api/streams/:id/reconcile — sync on-chain state to local SQLite
-app.post(
-  "/api/streams/:id/reconcile",
-  authMiddleware,
-  reconcileLimiter,
-  async (req: Request, res: Response) => {
-    const parsedId = parseStreamId(req.params.id);
-    if (!parsedId.ok) {
-      sendValidationError(req, res, parsedId.issues);
-      return;
-    }
-
-    const stream = getStream(parsedId.value);
-    if (!stream) {
-      sendApiError(req, res, 404, "Stream not found.", { code: "NOT_FOUND" });
-      return;
-    }
-
-    try {
-      const updated = await reconcileStream(parsedId.value);
-      res.json({ data: { ...updated, progress: calculateProgress(updated) } });
-    } catch (error: any) {
-      if (error.message === "Stream not found on-chain") {
-        sendApiError(req, res, 404, "Stream not found on-chain.", { code: "NOT_FOUND" });
-        return;
-      }
-      const normalizedError = normalizeUnknownApiError(
-        error,
-        "Failed to reconcile stream.",
-      );
-      sendApiError(
-        req,
-        res,
-        normalizedError.statusCode,
-        normalizedError.message,
-        {
-          code: normalizedError.code ?? "INTERNAL_ERROR",
-        },
-      );
-    }
-  },
-);
-
-// POST /api/streams/:id/claim — recipient claims vested tokens
+// POST /api/streams/:id/claim â€” recipient claims vested tokens
 app.post(
   "/api/streams/:id/claim",
   mutationLimiter,
