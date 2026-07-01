@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { StrKey } from "@stellar/stellar-sdk";
+import { validateWebhookUrl } from "../services/webhookUrl";
 
 export const STELLAR_ACCOUNT_REGEX = /^G[A-Z2-7]{55}$/;
 export const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
@@ -33,12 +34,19 @@ export const assetCodeSchema = z
 export const totalAmountSchema = z.coerce
   .number()
   .finite("Total amount must be a valid number.")
-  .positive("Amount must be greater than zero.");
+  .positive("Amount must be greater than zero.")
+  .refine(
+    (value) => {
+      const decimalStr = value.toString().split(".")[1];
+      return !decimalStr || decimalStr.length <= 7;
+    },
+    "Amount cannot have more than 7 decimal places."
+  );
 
 export const durationSecondsSchema = z.coerce
   .number()
   .int("durationSeconds must be a whole number of seconds.")
-  .min(60, "durationSeconds must be at least 60 seconds.");
+  .min(1, "durationSeconds must be at least 1 second.");
 
 export const unixTimestampSchema = z.coerce
   .number()
@@ -53,6 +61,7 @@ export const createStreamPayloadSchema = z
     totalAmount: totalAmountSchema,
     durationSeconds: durationSecondsSchema,
     startAt: unixTimestampSchema.optional(),
+    cliffSeconds: z.coerce.number().int().nonnegative().optional(),
   })
   .superRefine((payload, ctx) => {
     if (payload.sender === payload.recipient) {
@@ -61,6 +70,24 @@ export const createStreamPayloadSchema = z
         path: ["recipient"],
         message: "Recipient must differ from the sender account.",
       });
+    }
+    if (payload.startAt !== undefined) {
+      const now = Math.floor(Date.now() / 1000);
+      if (payload.startAt < now + 10) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["startAt"],
+          message: "startAt must be at least 10 seconds in the future.",
+        });
+      }
+      const maxFutureTimestamp = now + 365 * 24 * 60 * 60;
+      if (payload.startAt > maxFutureTimestamp) {
+        ctx.addIssue({
+          code: "custom",
+          path: ["startAt"],
+          message: "startAt cannot be more than 1 year in the future.",
+        });
+      }
     }
   });
 
@@ -82,15 +109,40 @@ export function createStreamPayloadWithAllowedAssetsSchema(
 
 export const updateStreamStartAtSchema = z.object({
   startAt: unixTimestampSchema,
+}).superRefine((payload, ctx) => {
+  const now = Math.floor(Date.now() / 1000);
+  if (payload.startAt < now + 10) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["startAt"],
+      message: "startAt must be at least 10 seconds in the future.",
+    });
+  }
+  const maxFutureTimestamp = now + 365 * 24 * 60 * 60;
+  if (payload.startAt > maxFutureTimestamp) {
+    ctx.addIssue({
+      code: "custom",
+      path: ["startAt"],
+      message: "startAt cannot be more than 1 year in the future.",
+    });
+  }
 });
 
-const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated"] as const;
+const VALID_EVENT_TYPES = ["created", "claimed", "canceled", "start_time_updated", "paused", "resumed", "completed"] as const;
 
 export const webhookRegistrationSchema = z.object({
   url: z
     .string()
     .url("url must be a valid URL")
-    .refine((url) => url.startsWith("https://"), "url must use https:// protocol"),
+    .superRefine((url, ctx) => {
+      const validation = validateWebhookUrl(url);
+      if (!validation.valid) {
+        ctx.addIssue({
+          code: "custom",
+          message: validation.reason ?? "url is not allowed",
+        });
+      }
+    }),
   events: z
     .array(z.string())
     .min(1, "events must be a non-empty array")
@@ -127,6 +179,26 @@ export const listEventsQuerySchema = z.object({
     .min(1, "limit must be greater than or equal to 1")
     .max(100, "limit must be less than or equal to 100")
     .optional(),
+  pageSize: z
+    .coerce.number()
+    .int("pageSize must be an integer")
+    .min(1, "pageSize must be greater than or equal to 1")
+    .max(100, "pageSize must be less than or equal to 100")
+    .optional(),
+  streamId: z
+    .string()
+    .trim()
+    .min(1, "streamId must not be empty if provided")
+    .optional(),
+  since: z
+    .coerce.number()
+    .int("since must be an integer")
+    .positive("since must be a positive unix timestamp")
+    .optional(),
+  cursor: z
+    .coerce.number()
+    .int("cursor must be an integer")
+    .optional(),
 });
 
 export const recipientAccountIdSchema = z.object({
@@ -135,6 +207,14 @@ export const recipientAccountIdSchema = z.object({
 
 export const senderAccountIdSchema = z.object({
   accountId: stellarAccountIdSchema,
+});
+
+export const bulkCancelStreamsSchema = z.object({
+  streamIds: z
+    .array(streamIdSchema)
+    .min(1, "At least one stream ID is required")
+    .max(20, "Maximum 20 stream IDs per request"),
+  sender: stellarAccountIdSchema,
 });
 
 export type CreateStreamPayload = z.infer<typeof createStreamPayloadSchema>;

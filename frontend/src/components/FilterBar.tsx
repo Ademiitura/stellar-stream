@@ -4,46 +4,65 @@ import { ListStreamsFilters } from "../services/api";
 interface FilterBarProps {
   filters: ListStreamsFilters;
   onChange: (filters: ListStreamsFilters) => void;
+  setUrlFilters?: (filters: ListStreamsFilters) => void;
 }
 
 const STATUS_OPTIONS = [
   { label: "All Statuses", value: "" },
   { label: "Scheduled", value: "scheduled" },
   { label: "Active", value: "active" },
+  { label: "Paused", value: "paused" },
   { label: "Completed", value: "completed" },
   { label: "Canceled", value: "canceled" },
 ];
 
-export function FilterBar({ filters, onChange }: FilterBarProps) {
+export function FilterBar({ filters, onChange, setUrlFilters }: FilterBarProps) {
+
   const handleTextChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     const { name, value } = e.target;
-    onChange({ ...filters, [name]: value });
+    const newFilters = { ...filters, [name]: value };
+    onChange(newFilters);
+    if (setUrlFilters) {
+      setUrlFilters({ ...newFilters, page: 1 });
+    }
   };
 
   const handleStatusChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    onChange({ ...filters, status: e.target.value });
+    const newFilters = { ...filters, status: e.target.value };
+    onChange(newFilters);
+    if (setUrlFilters) {
+      setUrlFilters({ ...newFilters, page: 1 });
+    }
   };
 
   const applyPreset = (preset: Partial<ListStreamsFilters>) => {
     // Presets clear other search/identity filters to focus on the monitoring view
-    onChange({
+    const newFilters = {
       status: preset.status || "",
       q: "",
       asset: "",
       sender: "",
       recipient: "",
       ...preset,
-    });
+    };
+    onChange(newFilters);
+    if (setUrlFilters) {
+      setUrlFilters({ ...newFilters, page: 1 });
+    }
   };
 
   const handleReset = () => {
-    onChange({
+    const newFilters = {
       status: "",
       q: "",
       asset: "",
       sender: "",
       recipient: "",
-    });
+    };
+    onChange(newFilters);
+    if (setUrlFilters) {
+      setUrlFilters({ ...newFilters, page: 1 });
+    }
   };
 
   return (
