@@ -185,7 +185,7 @@ const authChallengeLimiter = rateLimit({
   max: AUTH_CHALLENGE_RATE_LIMIT,
   standardHeaders: true,
   legacyHeaders: false,
-  handler: (req: Request, res: Response, next: NextFunction) => {
+  handler: (req: Request, res: Response, next: any) => {
     const resetTime = (req as any).rateLimit?.resetTime;
     const retryAfter = resetTime
       ? Math.ceil((resetTime.getTime() - Date.now()) / 1000)
@@ -198,7 +198,7 @@ const authChallengeLimiter = rateLimit({
 });
 
 // Rate limiters for read and mutation endpoints
-const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 120);
+const READ_RATE_LIMIT = Number(process.env.READ_RATE_LIMIT ?? 5000);
 const MUTATION_RATE_LIMIT = Number(process.env.MUTATION_RATE_LIMIT ?? 10);
 
 const readLimiter = rateLimit({
@@ -1031,12 +1031,45 @@ app.get(
       progress: calculateProgress(stream, now),
     }));
 
-    if (query.status) {
-      data = data.filter((stream) => stream.progress.status === query.status);
-    }
-    if (query.sender) {
-      data = data.filter(
-        (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+  const parsedQuery = listStreamsQuerySchema.safeParse(req.query);
+  if (!parsedQuery.success) {
+    sendValidationError(req, res, parsedQuery.error.issues);
+    return;
+  }
+  const query = parsedQuery.data;
+
+  let data = listStreamsByRecipient(accountId)
+    .map((stream) => ({
+      ...stream,
+      progress: calculateProgress(stream),
+    }));
+
+  if (query.status) {
+    data = data.filter((stream) => stream.progress.status === query.status);
+  }
+  if (query.sender) {
+    data = data.filter(
+      (stream) => stream.sender.toLowerCase() === query.sender!.toLowerCase(),
+    );
+  }
+  if (query.asset) {
+    data = data.filter(
+      (stream) => stream.assetCode.toLowerCase() === query.asset!.toLowerCase(),
+    );
+  }
+  if (query.assetCode && query.assetCode.length > 0) {
+    data = data.filter((stream) =>
+      query.assetCode!.includes(stream.assetCode.toUpperCase()),
+    );
+  }
+  if (query.q && query.q.length > 0) {
+    const searchTerm = query.q.toLowerCase();
+    data = data.filter((stream) => {
+      return (
+        stream.id.toLowerCase().includes(searchTerm) ||
+        stream.sender.toLowerCase().includes(searchTerm) ||
+        stream.recipient.toLowerCase().includes(searchTerm) ||
+        stream.assetCode.toLowerCase().includes(searchTerm)
       );
     }
     if (query.asset) {
