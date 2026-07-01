@@ -8,7 +8,7 @@ import rateLimit from "express-rate-limit";
 import swaggerUi from "swagger-ui-express";
 import { z } from "zod";
 import { createServer } from "http";
-import { searchStreamsFts } from "./services/db";
+import { searchStreamsFts, getAllowedAssets, addAllowedAsset, removeAllowedAsset } from "./services/db";
 import { initWebSocket } from "./services/websocket";
 import {
   normalizeUnknownApiError,
@@ -74,10 +74,13 @@ import {
 
 import {
   authMiddleware,
+  adminJwtAuth,
   generateChallenge,
   refreshToken,
   verifyChallengeAndIssueToken,
+  getJwtSecret,
 } from "./services/auth";
+import jwt from "jsonwebtoken";
 import {
   bulkCancelStreamsSchema,
   createStreamPayloadWithAllowedAssetsSchema,
@@ -450,8 +453,55 @@ app.get(
 
 app.get("/api/assets", (_req: Request, res: Response) => {
   res.json({
-    data: ALLOWED_ASSETS,
+    data: getAllowedAssets(),
   });
+});
+
+app.get("/api/admin/assets", adminJwtAuth, (_req: Request, res: Response) => {
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.post("/api/admin/assets", adminJwtAuth, (req: Request, res: Response) => {
+  const code = req.body?.code;
+  if (typeof code !== "string" || !code.trim()) {
+    sendApiError(req, res, 400, "Asset code is required.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  const cleanCode = code.trim().toUpperCase();
+  const ASSET_CODE_REGEX = /^[A-Za-z0-9]{1,12}$/;
+  if (!ASSET_CODE_REGEX.test(cleanCode)) {
+    sendApiError(req, res, 400, "Asset code must be 1–12 alphanumeric characters.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  addAllowedAsset(cleanCode);
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.delete("/api/admin/assets/:code", adminJwtAuth, (req: Request, res: Response) => {
+  const { code } = req.params;
+  if (!code) {
+    sendApiError(req, res, 400, "Asset code is required.", { code: "VALIDATION_ERROR" });
+    return;
+  }
+  const cleanCode = (code as string).trim().toUpperCase();
+  removeAllowedAsset(cleanCode);
+  res.json({
+    data: getAllowedAssets(),
+  });
+});
+
+app.post(["/api/admin/auth", "/api/auth/admin"], (req: Request, res: Response) => {
+  const apiKey = req.body?.apiKey || req.header("X-Admin-Key");
+  if (!apiKey || apiKey !== process.env.ADMIN_API_KEY) {
+    sendApiError(req, res, 401, "Invalid Admin API Key.", { code: "UNAUTHORIZED" });
+    return;
+  }
+  const token = jwt.sign({ role: "admin", accountId: "admin", isAdmin: true }, getJwtSecret(), { expiresIn: "24h" });
+  res.json({ token });
 });
 
 app.get("/api/streams", readLimiter, async (req: Request, res: Response) => {
@@ -1127,8 +1177,9 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
-      ALLOWED_ASSETS,
+      currentAllowedAssets,
     ).safeParse(req.body);
     if (!parsedBody.success) {
       sendValidationError(req, res, parsedBody.error.issues);
@@ -1162,8 +1213,9 @@ app.post(
   mutationLimiter,
   authMiddleware,
   async (req: Request, res: Response) => {
+    const currentAllowedAssets = getAllowedAssets();
     const parsedBody = createStreamPayloadWithAllowedAssetsSchema(
-      ALLOWED_ASSETS,
+      currentAllowedAssets,
     ).safeParse(req.body);
     if (!parsedBody.success) {
       sendValidationError(req, res, parsedBody.error.issues);

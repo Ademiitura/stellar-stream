@@ -34,4 +34,22 @@ export function initDb(): void {
   db.pragma("cache_size = -64000");
 
 
+
+}
+
+export function getAllowedAssets(): string[] {
+  try {
+    const rows = db.prepare("SELECT code FROM allowed_assets").all() as Array<{ code: string }>;
+    return rows.map((r) => r.code);
+  } catch {
+    return [];
+  }
+}
+
+export function addAllowedAsset(code: string): void {
+  db.prepare("INSERT OR IGNORE INTO allowed_assets (code) VALUES (?)").run(code.trim().toUpperCase());
+}
+
+export function removeAllowedAsset(code: string): void {
+  db.prepare("DELETE FROM allowed_assets WHERE code = ?").run(code.trim().toUpperCase());
 }
