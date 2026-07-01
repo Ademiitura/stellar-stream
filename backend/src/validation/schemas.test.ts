@@ -333,8 +333,13 @@ describe("Duration Seconds Schema", () => {
         expect(result.success).toBe(false);
     });
 
-    it("should accept 1 second as minimum valid duration", () => {
-        const result = durationSecondsSchema.safeParse(1);
+    it("should reject durations below 60 seconds", () => {
+        const result = durationSecondsSchema.safeParse(59);
+        expect(result.success).toBe(false);
+    });
+
+    it("should accept 60 seconds as minimum valid duration", () => {
+        const result = durationSecondsSchema.safeParse(60);
         expect(result.success).toBe(true);
     });
 
