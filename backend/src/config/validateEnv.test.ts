@@ -23,47 +23,49 @@ describe("validateEnv", () => {
   describe("Acceptance Criteria 1: Invalid config fails fast with helpful messages", () => {
     it("should exit with code 1 when CONTRACT_ID is missing and Soroban enabled", () => {
       process.env = {
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        NODE_ENV: "production",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       validateEnv();
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Soroban configuration incomplete")
+        expect.stringContaining("STELLAR_CONTRACT_ID is required in production")
       );
     });
 
     it("should exit with code 1 when SERVER_PRIVATE_KEY is missing and Soroban enabled", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        NODE_ENV: "production",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       validateEnv();
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("Soroban configuration incomplete")
+        expect.stringContaining("SERVER_PRIVATE_KEY is required in production")
       );
     });
 
     it("should exit with code 1 when CONTRACT_ID format is invalid", () => {
       process.env = {
         CONTRACT_ID: "INVALID_CONTRACT_ID",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       validateEnv();
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("CONTRACT_ID validation failed")
+        expect.stringContaining("STELLAR_CONTRACT_ID validation failed")
       );
     });
 
     it("should exit with code 1 when SERVER_PRIVATE_KEY format is invalid", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
         SERVER_PRIVATE_KEY: "INVALID_KEY",
       };
 
@@ -77,8 +79,8 @@ describe("validateEnv", () => {
 
     it("should exit with code 1 when RPC_URL is invalid", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
         RPC_URL: "not-a-valid-url",
       };
 
@@ -86,13 +88,14 @@ describe("validateEnv", () => {
 
       expect(exitSpy).toHaveBeenCalledWith(1);
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        expect.stringContaining("RPC_URL validation failed")
+        expect.stringContaining("SOROBAN_RPC_URL validation failed")
       );
     });
 
     it("should provide helpful error message with suggestions", () => {
       process.env = {
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        NODE_ENV: "production",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       validateEnv();
@@ -123,6 +126,7 @@ describe("validateEnv", () => {
 
     it("should require CONTRACT_ID and SERVER_PRIVATE_KEY when Soroban enabled", () => {
       process.env = {
+        NODE_ENV: "production",
         SOROBAN_DISABLED: "false",
       };
 
@@ -133,18 +137,18 @@ describe("validateEnv", () => {
 
     it("should accept valid CONTRACT_ID and SERVER_PRIVATE_KEY", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       const config = validateEnv();
 
       expect(config.sorobanEnabled).toBe(true);
       expect(config.contractId).toBe(
-        "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3"
+        "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3"
       );
       expect(config.serverPrivateKey).toBe(
-        "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3"
+        "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3"
       );
       expect(exitSpy).not.toHaveBeenCalled();
     });
@@ -249,8 +253,8 @@ describe("validateEnv", () => {
 
     it("should validate RPC_URL default from README", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       const config = validateEnv();
@@ -260,8 +264,8 @@ describe("validateEnv", () => {
 
     it("should validate NETWORK_PASSPHRASE default from README", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       const config = validateEnv();
@@ -325,8 +329,8 @@ describe("validateEnv", () => {
 
     it("should return ValidatedConfig with all required properties", () => {
       process.env = {
-        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
-        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        CONTRACT_ID: "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
+        SERVER_PRIVATE_KEY: "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3",
       };
 
       const config = validateEnv();
@@ -344,6 +348,125 @@ describe("validateEnv", () => {
       expect(config).toHaveProperty("jwtSecret");
       expect(config).toHaveProperty("serverSigningKey");
       expect(config).toHaveProperty("domain");
+    });
+  });
+
+  describe("Acceptance Criteria: Startup validation for SOROBAN_RPC_URL, STELLAR_CONTRACT_ID, and STELLAR_NETWORK", () => {
+    describe("in production mode", () => {
+      beforeEach(() => {
+        process.env.NODE_ENV = "production";
+      });
+
+      it("should exit with code 1 when SOROBAN_RPC_URL is missing", () => {
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        
+        validateEnv();
+        
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SOROBAN_RPC_URL is required in production")
+        );
+      });
+
+      it("should exit with code 1 when STELLAR_CONTRACT_ID is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_CONTRACT_ID is required in production")
+        );
+      });
+
+      it("should exit with code 1 when STELLAR_NETWORK is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_NETWORK is required in production")
+        );
+      });
+
+      it("should exit with code 1 when SERVER_PRIVATE_KEY is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+
+        validateEnv();
+
+        expect(exitSpy).toHaveBeenCalledWith(1);
+        expect(consoleErrorSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SERVER_PRIVATE_KEY is required in production")
+        );
+      });
+    });
+
+    describe("in development mode", () => {
+      beforeEach(() => {
+        process.env.NODE_ENV = "development";
+      });
+
+      it("should log warning and use testnet default when SOROBAN_RPC_URL is missing", () => {
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("SOROBAN_RPC_URL is missing in development")
+        );
+        expect(config.rpcUrl).toBe("https://soroban-testnet.stellar.org:443");
+      });
+
+      it("should log warning and use testnet default when STELLAR_CONTRACT_ID is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_NETWORK = "testnet";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_CONTRACT_ID is missing in development")
+        );
+        expect(config.contractId).toBe("CCJW2RLIN4MQQ4DAJMMR3F5QPDA6QYTKXJMEVI3XOTDBTBCLBB553J74");
+      });
+
+      it("should log warning and use testnet default when STELLAR_NETWORK is missing", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(exitSpy).not.toHaveBeenCalled();
+        expect(consoleWarnSpy).toHaveBeenCalledWith(
+          expect.stringContaining("STELLAR_NETWORK is missing in development")
+        );
+        expect(config.networkPassphrase).toBe("Test SDF Network ; September 2015");
+      });
+
+      it("should map STELLAR_NETWORK public to public passphrase", () => {
+        process.env.SOROBAN_RPC_URL = "https://soroban-testnet.stellar.org:443";
+        process.env.STELLAR_CONTRACT_ID = "CBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+        process.env.STELLAR_NETWORK = "public";
+        process.env.SERVER_PRIVATE_KEY = "SBZVMB74Z76QZ3ZZZ3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3Z3";
+
+        const config = validateEnv();
+
+        expect(config.networkPassphrase).toBe("Public Global Stellar Network ; October 2015");
+      });
     });
   });
 });
