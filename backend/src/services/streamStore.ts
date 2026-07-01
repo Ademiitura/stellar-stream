@@ -18,6 +18,7 @@ import { streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
 import { initCache, getCache } from "./cache";
 import { resetStatsCache } from "./stats";
+import { resetStreamMetricsCache } from "./streamMetrics";
 import { logger } from "../logger";
 import { retryWithBackoff, SorobanSubmitError } from "../utils/sorobanRetry";
 
@@ -893,6 +894,7 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   // Webhook fires after the transaction commits â€” a webhook failure
   // must never roll back an already-persisted stream.
@@ -1181,6 +1183,7 @@ export async function cancelStream(
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   // Atomically write the updated stream row and the cancellation event.
   const db = getDb();
@@ -1231,6 +1234,7 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   triggerWebhook("paused", stream);
   return stream;
@@ -1270,6 +1274,7 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   triggerWebhook("resumed", stream);
   return stream;
@@ -1319,6 +1324,7 @@ export async function updateStreamStartAt(id: string,
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
+  resetStreamMetricsCache();
 
   return stream;
 }

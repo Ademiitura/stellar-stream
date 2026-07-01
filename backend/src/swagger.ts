@@ -379,6 +379,36 @@ export const swaggerDocument = {
           },
         },
       },
+      StreamMetrics: {
+        type: "object",
+        properties: {
+          total_streams: {
+            type: "integer",
+            description: "Total number of streams in the database.",
+            example: 42,
+          },
+          active_streams: {
+            type: "integer",
+            description: "Streams currently streaming (started, not paused, not yet ended or canceled).",
+            example: 10,
+          },
+          total_vested_usdc: {
+            type: "number",
+            description: "Total USDC vested across active and completed streams.",
+            example: 5000.5,
+          },
+          total_vested_xlm: {
+            type: "number",
+            description: "Total XLM vested across active and completed streams.",
+            example: 1200.25,
+          },
+          streams_completed_today: {
+            type: "integer",
+            description: "Number of streams completed since UTC midnight today.",
+            example: 3,
+          },
+        },
+      },
       Error: {
         type: "object",
         required: ["error", "statusCode"],
@@ -543,6 +573,48 @@ export const swaggerDocument = {
           },
           "500": {
             description: "Failed to compute stats.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+        },
+      },
+    },
+    "/api/metrics": {
+      get: {
+        summary: "Get aggregated stream metrics",
+        description:
+          "Returns aggregated stream metrics including counts and vested amounts by asset. " +
+          "Result is cached for 60 seconds. Requires a valid admin JWT (Bearer token).",
+        security: [{ bearerAuth: [] }],
+        responses: {
+          "200": {
+            description: "Aggregated stream metrics.",
+            content: {
+              "application/json": {
+                schema: {
+                  type: "object",
+                  properties: {
+                    data: {
+                      $ref: "#/components/schemas/StreamMetrics",
+                    },
+                  },
+                },
+              },
+            },
+          },
+          "401": {
+            description: "Missing, invalid, or expired JWT.",
+            content: {
+              "application/json": {
+                schema: { $ref: "#/components/schemas/Error" },
+              },
+            },
+          },
+          "500": {
+            description: "Failed to compute metrics.",
             content: {
               "application/json": {
                 schema: { $ref: "#/components/schemas/Error" },
