@@ -71,6 +71,13 @@ export class CircuitBreaker {
     }
   }
 
+  /** Resets the circuit breaker to CLOSED with zero failures. Intended for tests. */
+  public reset(): void {
+    this.failureCount = 0;
+    this.lastFailureTime = 0;
+    this.setState(CircuitState.CLOSED);
+  }
+
   private setState(newState: CircuitState): void {
     if (this.state !== newState) {
       logger.info({ from: this.state, to: newState }, "circuit breaker state changed");
@@ -116,6 +123,27 @@ export function initIndexer(
       logger.error({ value: startLedgerEnv }, "invalid INDEXER_START_LEDGER value");
     }
   }
+
+  // Load persisted cursor from DB to enable gap-fill on restart.
+  // If indexer_cursor has a row, resume from that ledger so no events
+  // between last_ledger_sequence+1 and the current RPC ledger are skipped.
+  try {
+    const db = getDb();
+    const row = db
+      .prepare("SELECT last_ledger_sequence FROM indexer_cursor WHERE id = 1")
+      .get() as { last_ledger_sequence: number } | undefined;
+    if (row && row.last_ledger_sequence > 0) {
+      lastProcessedLedger = row.last_ledger_sequence;
+      logger.info(
+        { lastProcessedLedger },
+        "indexer resumed from persisted cursor — gap-fill will fetch missing ledgers",
+      );
+    }
+  } catch (err) {
+    // DB may not be ready yet (e.g. tests that mock getDb); log and proceed
+    // with lastProcessedLedger = 0 so a full backfill is attempted.
+    logger.warn({ err }, "could not read indexer cursor from DB; starting from ledger 0");
+  }
 }
 
 export function startIndexer(intervalMs = 10000): void {
@@ -142,6 +170,22 @@ export function stopIndexer(): void {
     indexerInterval = null;
     logger.info("event indexer stopped");
   }
+}
+
+/**
+ * Resets all module-level indexer state.
+ * Intended for use in tests only — allows each test to start with a clean slate
+ * without module-cache pollution from a previous `initIndexer` call.
+ * @internal
+ */
+export function resetIndexerState(): void {
+  rpcServer = null;
+  contractId = null;
+  networkPassphrase = Networks.TESTNET;
+  lastProcessedLedger = 0;
+  indexerInterval = null;
+  indexerStartLedger = null;
+  circuitBreaker.reset();
 }
 
 async function indexEvents(): Promise<void> {
@@ -188,6 +232,14 @@ async function indexEvents(): Promise<void> {
 
       lastProcessedLedger = currentLedger;
 
+      // Persist the cursor so a restart can resume from here instead of
+      // re-fetching from ledger 0 (gap-fill checkpoint).
+      db.prepare(
+        `INSERT INTO indexer_cursor (id, last_ledger_sequence)
+         VALUES (1, ?)
+         ON CONFLICT(id) DO UPDATE SET last_ledger_sequence = excluded.last_ledger_sequence`,
+      ).run(currentLedger);
+      lastIndexedLedger.set(currentLedger);
     })();
 
     ledgersScannedTotal.inc(currentLedger - startLedger);
