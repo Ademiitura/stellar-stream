@@ -1599,6 +1599,40 @@ app.post(
   },
 );
 
+// POST /api/streams/:id/reconcile — sync local state with on-chain state
+app.post(
+  "/api/streams/:id/reconcile",
+  reconcileLimiter,
+  authMiddleware,
+  async (req: Request, res: Response) => {
+    const parsedId = parseStreamId(req.params.id);
+    if (!parsedId.ok) {
+      sendValidationError(req, res, parsedId.issues);
+      return;
+    }
+
+    try {
+      const updated = await reconcileStream(parsedId.value);
+      res.json({ data: { ...updated, progress: calculateProgress(updated) } });
+    } catch (error: any) {
+      logger.error({ err: error, streamId: parsedId.value }, "failed to reconcile stream");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to reconcile stream.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        {
+          code: normalizedError.code ?? "INTERNAL_ERROR",
+        },
+      );
+    }
+  },
+);
+
 app.patch(
   "/api/streams/:id/start-time",
   authMiddleware,
