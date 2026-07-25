@@ -168,17 +168,6 @@ impl StellarStreamContract {
                 panic!("ContractError::TokenNotAllowed");
             }
         }
-        if !is_native {
-            let allowed_tokens: Vec<Address> = env.storage().instance().get(&DataKey::AllowedTokens).unwrap_or_else(|| Vec::new(&env));
-            #[cfg(not(any(test, feature = "testutils")))]
-            if !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-            #[cfg(any(test, feature = "testutils"))]
-            if !allowed_tokens.is_empty() && !allowed_tokens.contains(&token) {
-                panic!("ContractError::TokenNotAllowed");
-            }
-        }
         
         let actual_token = if is_native {
             env.storage().instance().get(&DataKey::NativeToken).unwrap_or_else(|| panic!("not initialized"))
@@ -668,6 +657,29 @@ impl StellarStreamContract {
             allowed.remove(i);
             env.storage().instance().set(&DataKey::AllowedTokens, &allowed);
         }
+    }
+
+    /// Returns the current allowlist of permitted asset addresses.
+    pub fn get_allowed_tokens(env: Env) -> Vec<Address> {
+        env.storage()
+            .instance()
+            .get(&DataKey::AllowedTokens)
+            .unwrap_or_else(|| Vec::new(&env))
+    }
+
+    /// Transfers the admin role to a new address.
+    /// Only the current admin can call this. Panics if the contract is not initialized.
+    pub fn set_admin(env: Env, admin: Address, new_admin: Address) {
+        let admin_stored: Address = env
+            .storage()
+            .instance()
+            .get(&DataKey::Admin)
+            .unwrap_or_else(|| panic!("contract not initialized"));
+        if admin_stored != admin {
+            panic!("unauthorized");
+        }
+        admin.require_auth();
+        env.storage().instance().set(&DataKey::Admin, &new_admin);
     }
 }
 
