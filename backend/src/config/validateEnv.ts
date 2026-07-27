@@ -55,6 +55,14 @@ const archiveCronIntervalSchema = z
     message: "must be a valid number >= 60000 (minimum 1 minute)",
   });
 
+// Indexer fallback polling interval validation
+const fallbackPollIntervalSchema = z
+  .string()
+  .transform((val: string) => parseInt(val, 10))
+  .refine((val: number) => !isNaN(val) && val >= 1000, {
+    message: "must be a valid number >= 1000 (minimum 1 second)",
+  });
+
 // Admin API key validation
 const adminApiKeySchema = z
   .string()
@@ -84,6 +92,8 @@ const envSchema = z.object({
   INDEXER_POLL_INTERVAL_MS: indexerPollIntervalSchema.optional().default(10000),
   RECONCILIATION_INTERVAL_MS: reconciliationIntervalSchema.optional().default(60000),
   ARCHIVE_CRON_INTERVAL_MS: archiveCronIntervalSchema.optional().default(86400000),
+  INDEXER_FALLBACK_POLLING_ENABLED: z.string().optional().default("false"),
+  INDEXER_FALLBACK_POLL_INTERVAL_MS: fallbackPollIntervalSchema.optional().default(10000),
   ALLOWED_ORIGINS: z.string().optional(),
 });
 
@@ -104,6 +114,8 @@ export interface ValidatedConfig {
   indexerPollIntervalMs: number;
   reconciliationIntervalMs: number;
   archiveCronIntervalMs: number;
+  indexerFallbackPollingEnabled: boolean;
+  indexerFallbackPollIntervalMs: number;
   adminApiKey: string | null;
   allowedOrigins: string | undefined;
 }
@@ -274,6 +286,8 @@ export function validateEnv(): ValidatedConfig {
       indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
       reconciliationIntervalMs: env.RECONCILIATION_INTERVAL_MS,
       archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
+      indexerFallbackPollingEnabled: env.INDEXER_FALLBACK_POLLING_ENABLED,
+      indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
     },
     "configuration validated",
   );
@@ -295,6 +309,8 @@ export function validateEnv(): ValidatedConfig {
     indexerPollIntervalMs: env.INDEXER_POLL_INTERVAL_MS,
     reconciliationIntervalMs: env.RECONCILIATION_INTERVAL_MS,
     archiveCronIntervalMs: env.ARCHIVE_CRON_INTERVAL_MS,
+    indexerFallbackPollingEnabled: process.env.INDEXER_FALLBACK_POLLING_ENABLED === "true",
+    indexerFallbackPollIntervalMs: env.INDEXER_FALLBACK_POLL_INTERVAL_MS,
     adminApiKey,
     allowedOrigins: env.ALLOWED_ORIGINS,
   };
