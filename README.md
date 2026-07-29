@@ -9,6 +9,7 @@ It includes:
 
 This repository is intentionally lightweight and easy to extend.
 For common questions and troubleshooting, see our `FAQ.md`.
+For real-world stream use cases and runnable API examples, see [`docs/USE_CASES.md`](docs/USE_CASES.md).
 For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
@@ -474,7 +475,7 @@ def verify_webhook(secret: str, raw_body: bytes, signature_header: str) -> bool:
 ├── contracts/
 │   ├── src/lib.rs                # Soroban contract implementation
 │   └── Cargo.toml
-├── docs/                         # Extended project architectural documentation
+├── docs/                         # Architectural docs & use cases (USE_CASES.md)
 ├── frontend/
 │   ├── src/
 │   │   ├── components/           # UI Elements (Tables, Forms, Timelines)
