@@ -2,6 +2,8 @@
 
 This document outlines 5 primary real-world use cases for payment streaming using StellarStream on the Stellar network. Each use case includes a business description, complete stream parameter specifications, API endpoint links, and copy-pasteable runnable code examples targeting the local backend API (`http://localhost:3001`).
 
+> **Note on Account IDs**: All `sender` and `recipient` addresses in these examples must be valid 56-character Stellar public keys starting with `G`. Substitute valid Stellar account IDs for your target network environment before executing requests.
+
 ---
 
 ## Table of Contents
@@ -30,7 +32,7 @@ Traditional payroll operates on fixed bi-weekly or monthly payout schedules, cre
 | Parameter | Type | Example Value | Description |
 | :--- | :--- | :--- | :--- |
 | `sender` | `string` | `GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST` | Employer Stellar G-Address (Vault/Payroll wallet) |
-| `recipient` | `string` | `GDFX6B5YMQX2XN7QZ5N6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X` | Employee Stellar G-Address |
+| `recipient` | `string` | `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` | Employee Stellar G-Address |
 | `assetCode` | `string` | `USDC` | Payment token (USDC or XLM) |
 | `totalAmount` | `number` | `5000` | Monthly gross salary (5,000 USDC) |
 | `durationSeconds` | `number` | `2592000` | Stream duration (30 days = $30 \times 86,400$s) |
@@ -53,7 +55,7 @@ curl -X POST http://localhost:3001/api/streams \
   -H "Content-Type: application/json" \
   -d '{
     "sender": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST",
-    "recipient": "GDFX6B5YMQX2XN7QZ5N6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X",
+    "recipient": "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
     "assetCode": "USDC",
     "totalAmount": 5000,
     "durationSeconds": 2592000
@@ -62,20 +64,22 @@ curl -X POST http://localhost:3001/api/streams \
 
 #### Node.js / JavaScript Example
 ```javascript
-const response = await fetch("http://localhost:3001/api/streams", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    sender: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST",
-    recipient: "GDFX6B5YMQX2XN7QZ5N6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X",
-    assetCode: "USDC",
-    totalAmount: 5000,
-    durationSeconds: 2592000
-  }),
-});
+(async () => {
+  const response = await fetch("http://localhost:3001/api/streams", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sender: "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST",
+      recipient: "GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN",
+      assetCode: "USDC",
+      totalAmount: 5000,
+      durationSeconds: 2592000
+    }),
+  });
 
-const data = await response.json();
-console.log("Payroll Stream Created:", data);
+  const data = await response.json();
+  console.log("Payroll Stream Created:", data);
+})();
 ```
 
 ---
@@ -86,7 +90,7 @@ console.log("Payroll Stream Created:", data);
 Project owners hire external contractors for multi-month deliverables. To protect both parties, funds are committed into a stream with a **cliff period**. The cliff ensures the contractor delivers initial groundwork before any funds vest, while giving the contractor confidence that project funds are secured in escrow.
 
 **Key Benefits:**
-- **Risk Mitigation**: The cliff period (`cliffSeconds`) delays initial claimable vesting until a initial milestone date.
+- **Risk Mitigation**: The cliff period (`cliffSeconds`) delays initial claimable vesting until an initial milestone date.
 - **Continuous Retention**: After the cliff, funds vest continuously per second.
 - **Escrow Assurance**: Funds are locked upfront, removing client non-payment risks.
 
@@ -94,8 +98,8 @@ Project owners hire external contractors for multi-month deliverables. To protec
 
 | Parameter | Type | Example Value | Description |
 | :--- | :--- | :--- | :--- |
-| `sender` | `string` | `GBAF7W4L57O66K3OQ2K4J5J6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X` | Client / Project Treasury Stellar G-Address |
-| `recipient` | `string` | `GCP3V89Z7Y6X5W4V3U2T1S0R9Q8P7O6N5M4L3K2J1I0H9G8F7E6D5C4B` | Contractor Stellar G-Address |
+| `sender` | `string` | `GCLWGQPMKXQSPF776IU33AH4PXM63MTVTEWBD55FCCH6WKG4ICBKPLJF` | Client / Project Treasury Stellar G-Address |
+| `recipient` | `string` | `GCXKG6RN4ONIEPCMNFB732A436Z5PNDSRLGWK7GBLCMQLIFO4W7EY2EW` | Contractor Stellar G-Address |
 | `assetCode` | `string` | `USDC` | Settlement token |
 | `totalAmount` | `number` | `12000` | Total contract value ($12,000) |
 | `durationSeconds` | `number` | `7776000` | Total contract term (90 days = $90 \times 86,400$s) |
@@ -105,7 +109,7 @@ Project owners hire external contractors for multi-month deliverables. To protec
 ### Relevant API Endpoints
 - **Create Contractor Stream**: [`POST /api/streams`](#post-apistreams)
 - **View Stream Details & Progress**: [`GET /api/streams/:id`](#get-apistreamsid)
-- **Check Claimable Amount**: [`GET /api/streams/claimable/batch`](#post-apistreamsclaimablebatch)
+- **Check Claimable Amount**: [`POST /api/streams/claimable/batch`](#post-apistreamsclaimablebatch)
 - **Cancel Unvested Stream**: [`POST /api/streams/:id/cancel`](#post-apistreamsidcancel)
 
 ### Code Examples (Local Backend `http://localhost:3001`)
@@ -115,8 +119,8 @@ Project owners hire external contractors for multi-month deliverables. To protec
 curl -X POST http://localhost:3001/api/streams \
   -H "Content-Type: application/json" \
   -d '{
-    "sender": "GBAF7W4L57O66K3OQ2K4J5J6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X",
-    "recipient": "GCP3V89Z7Y6X5W4V3U2T1S0R9Q8P7O6N5M4L3K2J1I0H9G8F7E6D5C4B",
+    "sender": "GCLWGQPMKXQSPF776IU33AH4PXM63MTVTEWBD55FCCH6WKG4ICBKPLJF",
+    "recipient": "GCXKG6RN4ONIEPCMNFB732A436Z5PNDSRLGWK7GBLCMQLIFO4W7EY2EW",
     "assetCode": "USDC",
     "totalAmount": 12000,
     "durationSeconds": 7776000,
@@ -126,21 +130,23 @@ curl -X POST http://localhost:3001/api/streams \
 
 #### Node.js / JavaScript Example
 ```javascript
-const response = await fetch("http://localhost:3001/api/streams", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    sender: "GBAF7W4L57O66K3OQ2K4J5J6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6XQ5Z6X",
-    recipient: "GCP3V89Z7Y6X5W4V3U2T1S0R9Q8P7O6N5M4L3K2J1I0H9G8F7E6D5C4B",
-    assetCode: "USDC",
-    totalAmount: 12000,
-    durationSeconds: 7776000,
-    cliffSeconds: 1209600
-  }),
-});
+(async () => {
+  const response = await fetch("http://localhost:3001/api/streams", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      sender: "GCLWGQPMKXQSPF776IU33AH4PXM63MTVTEWBD55FCCH6WKG4ICBKPLJF",
+      recipient: "GCXKG6RN4ONIEPCMNFB732A436Z5PNDSRLGWK7GBLCMQLIFO4W7EY2EW",
+      assetCode: "USDC",
+      totalAmount: 12000,
+      durationSeconds: 7776000,
+      cliffSeconds: 1209600
+    }),
+  });
 
-const data = await response.json();
-console.log("Contractor Vesting Stream Created:", data);
+  const data = await response.json();
+  console.log("Contractor Vesting Stream Created:", data);
+})();
 ```
 
 ---
@@ -159,8 +165,8 @@ DAOs compensate core contributors, working group leads, and delegates across gov
 
 | Parameter | Type | Example Value | Description |
 | :--- | :--- | :--- | :--- |
-| `sender` | `string` | `GDAO4TREASURY3210X987V654U321T098S765R432Q109P876O543N` | DAO Treasury Multisig Stellar G-Address |
-| `recipient` | `string` | `GCONTRIBUTOR1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234` | DAO Contributor Stellar G-Address |
+| `sender` | `string` | `GAHK7EEG2WWHVKTZB2DH5B4BC5ICUX62VJTO3AVEZJTHV72WZU2A6W5C` | DAO Treasury Multisig Stellar G-Address |
+| `recipient` | `string` | `GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST` | DAO Contributor Stellar G-Address |
 | `assetCode` | `string` | `USDC` | DAO stablecoin asset |
 | `totalAmount` | `number` | `3000` | Quarterly contributor stipend (3,000 USDC) |
 | `durationSeconds` | `number` | `7776000` | Governance epoch (90 days = $90 \times 86,400$s) |
@@ -181,8 +187,8 @@ DAOs compensate core contributors, working group leads, and delegates across gov
 curl -X POST http://localhost:3001/api/streams \
   -H "Content-Type: application/json" \
   -d '{
-    "sender": "GDAO4TREASURY3210X987V654U321T098S765R432Q109P876O543N",
-    "recipient": "GCONTRIBUTOR1234567890ABCDEFGHIJKLMNOPQRSTUVWXYZ1234",
+    "sender": "GAHK7EEG2WWHVKTZB2DH5B4BC5ICUX62VJTO3AVEZJTHV72WZU2A6W5C",
+    "recipient": "GBRPYHIL2CI3FNQ4BXLFMNDLFJUNPU2HY3ZMFXYCZLYWBKHBGXI5AMST",
     "assetCode": "USDC",
     "totalAmount": 3000,
     "durationSeconds": 7776000
@@ -198,17 +204,19 @@ curl -X POST http://localhost:3001/api/streams/claimable/batch \
 
 #### Node.js / JavaScript Example
 ```javascript
-// Batch check claimable balances across DAO streams
-const batchResponse = await fetch("http://localhost:3001/api/streams/claimable/batch", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-  body: JSON.stringify({
-    streamIds: ["1", "2", "3"],
-  }),
-});
+(async () => {
+  // Batch check claimable balances across DAO streams
+  const batchResponse = await fetch("http://localhost:3001/api/streams/claimable/batch", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      streamIds: ["1", "2", "3"],
+    }),
+  });
 
-const batchData = await batchResponse.json();
-console.log("DAO Claimable Batch Status:", batchData);
+  const batchData = await batchResponse.json();
+  console.log("DAO Claimable Batch Status:", batchData);
+})();
 ```
 
 ---
@@ -227,8 +235,8 @@ SaaS platforms, media streaming apps, and API services can replace rigid upfront
 
 | Parameter | Type | Example Value | Description |
 | :--- | :--- | :--- | :--- |
-| `sender` | `string` | `GSUBSCRIBER111222333444555666777888999000AAABBBCCCDDD` | Subscriber Stellar G-Address |
-| `recipient` | `string` | `GSERVICEPROVIDER999888777666555444333222111AAABBBCCCD` | SaaS Provider Stellar G-Address |
+| `sender` | `string` | `GA5ZSEJYB37JRC5AVCIA5MOP4RHTM335X2KGX3IHOJAPP5RE34K4KZVN` | Subscriber Stellar G-Address |
+| `recipient` | `string` | `GCLWGQPMKXQSPF776IU33AH4PXM63MTVTEWBD55FCCH6WKG4ICBKPLJF` | SaaS Provider Stellar G-Address |
 | `assetCode` | `string` | `USDC` | Subscription asset |
 | `totalAmount` | `number` | `100` | Total monthly budget ($100 USDC) |
 | `durationSeconds` | `number` | `2592000` | 30-day service window ($30 \times 86,400$s) |
@@ -257,13 +265,15 @@ curl -X POST http://localhost:3001/api/streams/1/resume \
 
 #### Node.js / JavaScript Example
 ```javascript
-// Pause subscription
-const pauseRes = await fetch("http://localhost:3001/api/streams/1/pause", {
-  method: "POST",
-  headers: { "Content-Type": "application/json" },
-});
-const pausedStream = await pauseRes.json();
-console.log("Subscription Paused:", pausedStream);
+(async () => {
+  // Pause subscription
+  const pauseRes = await fetch("http://localhost:3001/api/streams/1/pause", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+  });
+  const pausedStream = await pauseRes.json();
+  console.log("Subscription Paused:", pausedStream);
+})();
 ```
 
 ---
@@ -282,8 +292,8 @@ Ecosystem funds and foundations award grants to open-source project teams. Inste
 
 | Parameter | Type | Example Value | Description |
 | :--- | :--- | :--- | :--- |
-| `sender` | `string` | `GFOUNDATION888777666555444333222111000AAABBBCCCDDDEEE` | Ecosystem Foundation Stellar G-Address |
-| `recipient` | `string` | `GGRANTRECIPIENT777666555444333222111000AAABBBCCCDDDEF` | Grantee Team Stellar G-Address |
+| `sender` | `string` | `GCXKG6RN4ONIEPCMNFB732A436Z5PNDSRLGWK7GBLCMQLIFO4W7EY2EW` | Ecosystem Foundation Stellar G-Address |
+| `recipient` | `string` | `GAHK7EEG2WWHVKTZB2DH5B4BC5ICUX62VJTO3AVEZJTHV72WZU2A6W5C` | Grantee Team Stellar G-Address |
 | `assetCode` | `string` | `XLM` | Grant asset (XLM or USDC) |
 | `totalAmount` | `number` | `50000` | Total grant allocation (50,000 XLM) |
 | `durationSeconds` | `number` | `15552000` | 6-month grant term ($180 \times 86,400$s) |
@@ -305,8 +315,8 @@ Ecosystem funds and foundations award grants to open-source project teams. Inste
 curl -X POST http://localhost:3001/api/streams/fee-estimate \
   -H "Content-Type: application/json" \
   -d '{
-    "sender": "GFOUNDATION888777666555444333222111000AAABBBCCCDDDEEE",
-    "recipient": "GGRANTRECIPIENT777666555444333222111000AAABBBCCCDDDEF",
+    "sender": "GCXKG6RN4ONIEPCMNFB732A436Z5PNDSRLGWK7GBLCMQLIFO4W7EY2EW",
+    "recipient": "GAHK7EEG2WWHVKTZB2DH5B4BC5ICUX62VJTO3AVEZJTHV72WZU2A6W5C",
     "assetCode": "XLM",
     "totalAmount": 50000,
     "durationSeconds": 15552000,
@@ -319,10 +329,12 @@ curl -X GET "http://localhost:3001/api/events?streamId=1"
 
 #### Node.js / JavaScript Example
 ```javascript
-// Query stream event audit history
-const eventsRes = await fetch("http://localhost:3001/api/events?streamId=1");
-const eventsData = await eventsRes.json();
-console.log("Grant Stream Audit Events:", eventsData);
+(async () => {
+  // Query stream event audit history
+  const eventsRes = await fetch("http://localhost:3001/api/events?streamId=1");
+  const eventsData = await eventsRes.json();
+  console.log("Grant Stream Audit Events:", eventsData);
+})();
 ```
 
 ---
@@ -331,18 +343,18 @@ console.log("Grant Stream Audit Events:", eventsData);
 
 | Method | Path | Description |
 | :--- | :--- | :--- |
-| `POST` | `/api/streams` | Create a new payment stream |
-| `GET` | `/api/streams` | List streams with filters (`status`, `recipient`, `sender`, `assetCode`, `page`, `limit`) |
-| `GET` | `/api/streams/:id` | Fetch single stream state and progress |
-| `POST` | `/api/streams/:id/pause` | Pause an active stream (sender only) |
-| `POST` | `/api/streams/:id/resume` | Resume a paused stream (sender only) |
-| `POST` | `/api/streams/:id/cancel` | Cancel a stream and return unvested funds to sender |
-| `POST` | `/api/streams/bulk-cancel` | Cancel multiple streams in a single call |
-| `GET` | `/api/streams/sender/:address` | Fetch all streams created by a specific sender |
-| `GET` | `/api/streams/recipient/:address` | Fetch all streams where address is recipient |
-| `POST` | `/api/streams/claimable/batch` | Simulate and fetch claimable balances across multiple streams |
-| `POST` | `/api/streams/fee-estimate` | Estimate network transaction fees for creating a stream |
-| `GET` | `/api/events` | Query global or stream-specific lifecycle event history |
-| `GET` | `/api/streams/export.csv` | Export stream data to CSV format |
+| <a id="post-apistreams">`POST`</a> | `/api/streams` | Create a new payment stream |
+| <a id="get-apistreams">`GET`</a> | `/api/streams` | List streams with filters (`status`, `recipient`, `sender`, `assetCode`, `page`, `limit`) |
+| <a id="get-apistreamsid">`GET`</a> | `/api/streams/:id` | Fetch single stream state and progress |
+| <a id="post-apistreamsidpause">`POST`</a> | `/api/streams/:id/pause` | Pause an active stream (sender only) |
+| <a id="post-apistreamsidresume">`POST`</a> | `/api/streams/:id/resume` | Resume a paused stream (sender only) |
+| <a id="post-apistreamsidcancel">`POST`</a> | `/api/streams/:id/cancel` | Cancel a stream and return unvested funds to sender |
+| <a id="post-apistreamsbulk-cancel">`POST`</a> | `/api/streams/bulk-cancel` | Cancel multiple streams in a single call |
+| <a id="get-apistreamssenderaddress">`GET`</a> | `/api/streams/sender/:address` | Fetch all streams created by a specific sender |
+| <a id="get-apistreamsrecipientaddress">`GET`</a> | `/api/streams/recipient/:address` | Fetch all streams where address is recipient |
+| <a id="post-apistreamsclaimablebatch">`POST`</a> | `/api/streams/claimable/batch` | Simulate and fetch claimable balances across multiple streams |
+| <a id="post-apistreamsfee-estimate">`POST`</a> | `/api/streams/fee-estimate` | Estimate network transaction fees for creating a stream |
+| <a id="get-apievents">`GET`</a> | `/api/events` | Query global or stream-specific lifecycle event history |
+| <a id="get-apistreamsexportcsv">`GET`</a> | `/api/streams/export.csv` | Export stream data to CSV format |
 
 ---
