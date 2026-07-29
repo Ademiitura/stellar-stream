@@ -202,6 +202,14 @@ async function indexEvents(): Promise<void> {
 /**
  * Processes a single contract event and records it in history.
  * Note: This is now synchronous to support database transactions.
+ *
+ * All contract events share three base fields emitted by the contract:
+ *   stream_id  – identifies the stream
+ *   actor      – on-chain address that triggered the event
+ *   timestamp  – ledger close time (Unix seconds) from the contract
+ *
+ * We use event.ledgerClosedAt as the authoritative wall-clock timestamp for
+ * storage, and pass actor / amount fields as appropriate for each event type.
  */
 function processEvent(db: any, event: rpc.Api.EventResponse): void {
   try {
@@ -221,7 +229,8 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "created",
           timestamp,
-          value.sender,
+          // actor == sender for Created events
+          value.actor ?? value.sender,
           value.total_amount,
           {
             recipient: value.recipient,
@@ -239,8 +248,22 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "claimed",
           timestamp,
-          value.recipient,
+          // actor == recipient for Claimed events
+          value.actor ?? value.recipient,
           value.amount,
+          { claimed_amount: value.claimed_amount },
+          event.ledger,
+        );
+        break;
+
+      case "Completed":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "completed",
+          timestamp,
+          value.actor,
+          value.total_amount,
           undefined,
           event.ledger,
         );
@@ -252,8 +275,9 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "canceled",
           timestamp,
-          value.sender,
-          undefined,
+          // actor == sender for Canceled events
+          value.actor ?? value.sender,
+          value.refunded_amount,
           undefined,
           event.ledger,
         );
@@ -265,9 +289,10 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "paused",
           timestamp,
-          value.sender,
+          // actor == sender for Paused events
+          value.actor ?? value.sender,
           undefined,
-          undefined,
+          { paused_at: value.paused_at },
           event.ledger,
         );
         break;
@@ -278,9 +303,10 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "resumed",
           timestamp,
-          value.sender,
+          // actor == sender for Resumed events
+          value.actor ?? value.sender,
           undefined,
-          undefined,
+          { resumed_at: value.resumed_at },
           event.ledger,
         );
         break;
@@ -291,11 +317,30 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "transferred",
           timestamp,
-          value.old_recipient,
+          // actor == old_recipient (the one who authorized the transfer)
+          value.actor ?? value.old_recipient,
           undefined,
           { new_recipient: value.new_recipient },
           event.ledger,
         );
+        break;
+
+      case "Clawback":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "clawback",
+          timestamp,
+          // actor == admin address
+          value.actor,
+          value.amount,
+          { recipient: value.recipient },
+          event.ledger,
+        );
+        break;
+
+      default:
+        logger.warn({ eventName }, "unknown contract event type — skipped");
         break;
     }
   } catch (err) {
