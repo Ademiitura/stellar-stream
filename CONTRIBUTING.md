@@ -18,18 +18,20 @@ Follow these steps to go from zero to a running local environment with passing t
 
 ### Step-by-Step
 
-1. **Fork and clone the repository**
+1. **Fork the repository** — Click the **Fork** button at the top of the [StellarStream repo](https://github.com/ritik4ever/stellar-stream) on GitHub.
+
+2. **Clone your fork**
    ```bash
    git clone https://github.com/YOUR_USERNAME/stellar-stream.git
    cd stellar-stream
    ```
 
-2. **Install all dependencies** (backend + frontend)
+3. **Install all dependencies** (backend + frontend)
    ```bash
    npm run install:all
    ```
 
-3. **Set up environment variables**
+4. **Set up environment variables**
    ```bash
    cp backend/.env.example backend/.env
    ```
@@ -38,7 +40,7 @@ Follow these steps to go from zero to a running local environment with passing t
    SOROBAN_DISABLED=true
    ```
 
-4. **Start the development servers**
+5. **Start the development servers**
    ```bash
    # Start both backend and frontend
    npm run dev
@@ -48,22 +50,22 @@ Follow these steps to go from zero to a running local environment with passing t
    npm run dev:frontend  # UI on http://localhost:3000
    ```
 
-5. **Run backend tests**
+6. **Run backend tests**
    ```bash
    cd backend && npm test
    ```
 
-6. **Run frontend tests**
+7. **Run frontend tests**
    ```bash
    cd frontend && npm test
    ```
 
-7. **Run contract tests** (requires Rust toolchain)
+8. **Run contract tests** (requires Rust toolchain)
    ```bash
    cd contracts && cargo test
    ```
 
-8. **Run all contract tests including snapshot updates**
+9. **Run all contract tests including snapshot updates**
    ```bash
    cd contracts && cargo insta review
    ```
@@ -139,7 +141,10 @@ netstat -ano | findstr :3001
 taskkill /PID <PID> /F
 
 # Or use a different port
+#   macOS / Linux:
 PORT=3002 npm run dev:backend
+#   Windows (PowerShell):
+$env:PORT=3002; npm run dev:backend
 ```
 
 ### 2. Missing or invalid `.env` file
