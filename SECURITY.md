@@ -32,3 +32,28 @@ Once a report is received through the GitHub Security Advisory form, we commit t
 ## GitHub Security Advisories
 
 Maintainers: Please ensure that **GitHub Security Advisories** are enabled for this repository to allow researchers to submit reports privately.
+## Self-Audit Checklist
+
+| Finding | Severity | Mitigation | Status |
+| ------- | -------- | ---------- | ------ |
+| Reentrancy | Medium | Ensure functions are non-reentrant or use mutexes. | Not started |
+| Access Control | High | Review role-based access checks on all endpoints. | Completed |
+| Integer Overflow | Medium | Use safe arithmetic libraries and input validation. | Completed |
+| Front-Running | High | Implement commit-reveal schemes where applicable. | Completed |
+| Replay Attacks | High | Use nonces/timestamps and enforce nonce uniqueness. | Completed |
+
+### External Audit Firm Template
+
+**Audit Firm:** [Name]
+
+**Scope:** Review of smart contract code, API endpoints, and deployment scripts.
+
+**Deliverables:**
+- Security findings report
+- Severity classification
+- Recommended mitigations
+- Final audit sign‑off
+
+**Timeline:** ____________________
+
+**Contact:** ____________________
