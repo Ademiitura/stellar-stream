@@ -13,6 +13,16 @@ For production setup and operations, see `DEPLOYMENT.md` and `RUNBOOK.md`.
 For security policy and reporting vulnerabilities, see `SECURITY.md`.
 We are committed to a welcoming environment; see our `CODE_OF_CONDUCT.md`.
 
+## Architecture Decisions
+
+The repo keeps formal decision records in [`docs/adr/`](docs/adr/):
+
+- [ADR 0001: SQLite vs PostgreSQL for Stream Storage](docs/adr/0001-sqlite-storage.md)
+- [ADR 0002: Why Freighter Over Other Wallets](docs/adr/0002-freighter-wallet-choice.md)
+- [ADR 0003: Why Polling Over WebSocket for MVP](docs/adr/0003-polling-over-websocket.md)
+- [ADR 0004: Why SQLite Event History vs Append-Only Log](docs/adr/0004-sqlite-event-history-vs-append-only-log.md)
+- [ADR 0005: Multi-Asset Support Design Decision](docs/adr/0005-multi-asset-support-design.md)
+
 1) What The Project Does
 
 StellarStream models a payment stream where a sender allocates a total amount over a fixed duration.
