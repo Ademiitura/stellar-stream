@@ -3,6 +3,58 @@
 use soroban_sdk::{
     contract, contractimpl, contracttype, symbol_short, token::Client as TokenClient, Address, Env,
 };
+use soroban_sdk::{contract, contractimpl, symbol_short, Address, Env, IntoVal, Symbol};
+use crate::errors::ContractError;
+
+#[contract]
+pub struct EscrowVestingContract;
+
+#[contractimpl]
+impl EscrowVestingContract {
+    /// Claims available vested tokens for the recipient and transfers real tokens.
+    ///
+    /// # Parameters
+    /// * `env` - The execution environment.
+    /// * `recipient` - The account receiving the vested tokens (must authenticate).
+    /// * `token` - The SEP-41 token contract address.
+    ///
+    /// # Returns
+    /// * `Result<i128, ContractError>` - The actual amount of tokens transferred.
+    pub fn claim(env: Env, recipient: Address, token: Address) -> Result<i128, ContractError> {
+        // 1. Authenticate recipient
+        recipient.require_auth();
+
+        // 2. Calculate vested and already-claimed amounts from storage
+        let total_vested: i128 = env.storage().instance().get(&Symbol::new(&env, "total_vested")).unwrap_or(0);
+        let already_claimed: i128 = env.storage().instance().get(&Symbol::new(&env, "claimed_amount")).unwrap_or(0);
+
+        let claimable_amount = total_vested.checked_sub(already_claimed).unwrap_or(0);
+
+        // 3. Validate claimable amount - revert with InsufficientVested if 0 or negative
+        if claimable_amount <= 0 {
+            return Err(ContractError::InsufficientVested);
+        }
+
+        // 4. Update contract storage accounting
+        let new_claimed_total = already_claimed.checked_add(claimable_amount).unwrap();
+        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &new_claimed_total);
+
+        // 5. Transfer tokens via Soroban SEP-41 token client
+        let token_client = soroban_sdk::token::Client::new(&env, &token);
+        let contract_address = env.current_contract_address();
+
+        token_client.transfer(&contract_address, &recipient, &claimable_amount);
+
+        // 6. Emit Claimed event
+        env.events().publish(
+            (symbol_short!("Claimed"), recipient.clone()),
+            claimable_amount,
+        );
+
+        // 7. Return actual transferred amount
+        Ok(claimable_amount)
+    }
+}
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq, Eq)]
