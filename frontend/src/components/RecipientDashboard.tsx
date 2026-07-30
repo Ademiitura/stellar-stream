@@ -3,6 +3,8 @@ import { listRecipientStreams, StreamEvent } from "../services/api";
 import { Stream } from "../types/stream";
 import { CopyableAddress } from "./CopyableAddress";
 import { useClaimStream, ClaimState } from "../hooks/useClaimStream";
+import { useClaimBatch, type BatchClaimInput } from "../hooks/useClaimBatch";
+import { ClaimBatchModal } from "./ClaimBatchModal";
 import { ClaimResult } from "../services/soroban";
 
 interface RecipientDashboardProps {
@@ -17,10 +19,12 @@ interface RecipientDashboardProps {
 interface ToastProps {
   message: string;
   type: "success" | "error";
+  actionHref?: string;
+  actionLabel?: string;
   onDismiss: () => void;
 }
 
-function Toast({ message, type, onDismiss }: ToastProps) {
+function Toast({ message, type, actionHref, actionLabel, onDismiss }: ToastProps) {
   return (
     <div
       className={`claim-toast claim-toast--${type}`}
@@ -31,6 +35,16 @@ function Toast({ message, type, onDismiss }: ToastProps) {
         {type === "success" ? "✓" : "✕"}
       </span>
       <span className="claim-toast__msg">{message}</span>
+      {actionHref && actionLabel && (
+        <a
+          className="claim-toast__link"
+          href={actionHref}
+          target="_blank"
+          rel="noreferrer"
+        >
+          {actionLabel}
+        </a>
+      )}
       <button
         type="button"
         className="claim-toast__dismiss"
@@ -52,6 +66,7 @@ interface ClaimButtonProps {
   claimableAmount: number;
   assetCode: string;
   claimState: ClaimState;
+  walletConnected: boolean;
   onClaim: () => void;
 }
 
@@ -60,15 +75,17 @@ function ClaimButton({
   claimableAmount,
   assetCode,
   claimState,
+  walletConnected,
   onClaim,
 }: ClaimButtonProps) {
   const isThisStream = claimState.streamId === streamId;
   const isPending = isThisStream && claimState.status === "pending";
   const isConfirmed = isThisStream && claimState.status === "confirmed";
   const isFailed = isThisStream && claimState.status === "failed";
-  const disabled = isPending || claimableAmount <= 0;
+  const disabled = !walletConnected || isPending || claimableAmount <= 0;
 
   let label = `Claim ${claimableAmount} ${assetCode}`;
+  if (!walletConnected) label = "Connect wallet";
   if (isPending) label = "Claiming…";
   if (isConfirmed) label = "Claimed ✓";
 
@@ -99,8 +116,13 @@ function statusClass(status: Stream["progress"]["status"]): string {
     scheduled: "badge badge-scheduled",
     completed: "badge badge-completed",
     canceled: "badge badge-canceled",
+    paused: "badge badge-paused",
   };
   return map[status] ?? "badge";
+}
+
+function getStellarExpertTxUrl(txHash: string): string {
+  return `https://stellar.expert/explorer/testnet/tx/${txHash}`;
 }
 
 // ---------------------------------------------------------------------------
@@ -111,7 +133,14 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
   const [streams, setStreams] = useState<Stream[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [toast, setToast] = useState<{ message: string; type: "success" | "error" } | null>(null);
+  const [toast, setToast] = useState<{
+    message: string;
+    type: "success" | "error";
+    actionHref?: string;
+    actionLabel?: string;
+  } | null>(null);
+  const [batchModalOpen, setBatchModalOpen] = useState(false);
+  const [pendingBatchInputs, setPendingBatchInputs] = useState<BatchClaimInput[]>([]);
 
   // Auto-dismiss toast after 5 s
   useEffect(() => {
@@ -141,12 +170,35 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
     async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
       await refreshStreams();
       setToast({
-        message: `Successfully claimed ${result.claimedAmount} tokens from stream ${streamId}.`,
+        message: `Successfully claimed ${result.claimedAmount} ${result.assetCode} from stream ${streamId}. Transaction hash: ${result.txHash}`,
         type: "success",
+        actionHref: getStellarExpertTxUrl(result.txHash),
+        actionLabel: "View on Stellar Expert",
       });
     },
     [refreshStreams],
   );
+
+  const handleBatchClaimSuccess = useCallback(
+    async (streamId: string, result: ClaimResult, _history: StreamEvent[]) => {
+      await refreshStreams();
+      setToast({
+        message: `Successfully claimed ${result.claimedAmount} ${result.assetCode} from stream ${streamId}. Transaction hash: ${result.txHash}`,
+        type: "success",
+        actionHref: getStellarExpertTxUrl(result.txHash),
+        actionLabel: "View on Stellar Expert",
+      });
+    },
+    [refreshStreams],
+  );
+
+  const {
+    state: batchState,
+    fetchClaimable,
+    executeBatch,
+    reset: resetBatch,
+    isClaiming: isBatchClaiming,
+  } = useClaimBatch(handleBatchClaimSuccess);
 
   const handleClaimFailure = useCallback((_streamId: string, message: string) => {
     setToast({ message, type: "error" });
@@ -272,7 +324,31 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         <Toast
           message={toast.message}
           type={toast.type}
+          actionHref={toast.actionHref}
+          actionLabel={toast.actionLabel}
           onDismiss={() => setToast(null)}
+        />
+      )}
+
+      {batchModalOpen && (
+        <ClaimBatchModal
+          state={batchState}
+          streamCount={pendingBatchInputs.length}
+          onConfirm={async () => {
+            if (!recipientAddress) return;
+            const claimable = pendingBatchInputs
+              .map((input) => ({
+                ...input,
+                amount: batchState.claimableByStreamId[input.streamId] ?? 0,
+              }))
+              .filter((input) => input.amount > 0);
+            await executeBatch(claimable, recipientAddress);
+          }}
+          onClose={() => {
+            setBatchModalOpen(false);
+            resetBatch();
+            setPendingBatchInputs([]);
+          }}
         />
       )}
 
@@ -303,7 +379,48 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
 
         {activeStreams.length > 0 && (
           <section className="recipient-dashboard-section">
-            <h3 className="recipient-dashboard-section-title">Active streams</h3>
+            <div
+              style={{
+                display: "flex",
+                justifyContent: "space-between",
+                alignItems: "center",
+                marginBottom: "0.75rem",
+              }}
+            >
+              <h3 className="recipient-dashboard-section-title" style={{ margin: 0 }}>
+                Active streams
+              </h3>
+              {activeStreams.length > 1 && recipientAddress && (
+                <button
+                  type="button"
+                  className="btn-claim"
+                  disabled={isPending || isBatchClaiming}
+                  onClick={async () => {
+                    const inputs: BatchClaimInput[] = activeStreams.map((s) => ({
+                      streamId: s.id,
+                      amount: s.progress.vestedAmount,
+                      assetCode: s.assetCode,
+                    }));
+                    setPendingBatchInputs(inputs);
+                    setBatchModalOpen(true);
+                    try {
+                      await fetchClaimable(inputs);
+                    } catch (err) {
+                      setBatchModalOpen(false);
+                      setToast({
+                        message:
+                          err instanceof Error
+                            ? err.message
+                            : "Failed to load claimable amounts.",
+                        type: "error",
+                      });
+                    }
+                  }}
+                >
+                  Claim all
+                </button>
+              )}
+            </div>
             <div className="table-wrap">
               <table>
                 <thead>
@@ -355,11 +472,13 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
                           claimableAmount={stream.progress.vestedAmount}
                           assetCode={stream.assetCode}
                           claimState={claimState}
+                          walletConnected={Boolean(recipientAddress)}
                           onClaim={() =>
                             claim({
                               streamId: stream.id,
                               recipientAddress: recipientAddress,
                               amount: stream.progress.vestedAmount,
+                              assetCode: stream.assetCode,
                             })
                           }
                         />
@@ -413,10 +532,12 @@ export function RecipientDashboard({ recipientAddress }: RecipientDashboardProps
         )}
 
         {/* Global pending indicator — shown when any claim is in-flight */}
-        {isPending && (
+        {(isPending || isBatchClaiming) && (
           <div className="claim-pending-banner" role="status" aria-live="polite">
             <span className="btn-claim__spinner" aria-hidden="true" />
-            Waiting for on-chain confirmation…
+            {isBatchClaiming && batchState.progress.total > 0
+              ? `Claiming ${batchState.progress.current} of ${batchState.progress.total}…`
+              : "Waiting for on-chain confirmation…"}
           </div>
         )}
       </div>

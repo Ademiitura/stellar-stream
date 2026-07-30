@@ -1,47 +1,79 @@
 import { Request, Response, NextFunction } from "express";
 import crypto from "crypto";
+import { logger } from "../logger";
+import { runWithCorrelation } from "../correlationContext";
 
 declare global {
   namespace Express {
     interface Request {
-      requestId?: string;
+      requestId?: string; // Unique ID for log correlation (backward compat)
+      correlationId?: string; // Correlation ID for distributed tracing
     }
   }
 }
 
-export function requestLogger(req: Request, res: Response, next: NextFunction) {
-  // ✅ STEP 1: Generate unique request ID
-  const requestId = crypto.randomUUID();
-  req.requestId = requestId;
+function extractHeaderValue(
+  req: Request,
+  headerName: string,
+): string | undefined {
+  const headerValue = req.headers[headerName];
+  if (Array.isArray(headerValue)) {
+    return headerValue[0];
+  }
+  if (typeof headerValue === "string") {
+    return headerValue;
+  }
+  return undefined;
+}
 
-  // ✅ STEP 2: Track request start time
+function isValidId(id: string): boolean {
+  return /^[a-zA-Z0-9-]{1,128}$/.test(id);
+}
+
+export function requestLogger(req: Request, res: Response, next: NextFunction) {
+  // Accept X-Correlation-ID first, then X-Request-ID, then generate UUID
+  let correlationId =
+    extractHeaderValue(req, "x-correlation-id") ??
+    extractHeaderValue(req, "x-request-id");
+
+  if (!correlationId || !isValidId(correlationId)) {
+    correlationId = crypto.randomUUID();
+  }
+
+  req.correlationId = correlationId;
+  // Keep requestId for backward compatibility
+  req.requestId = correlationId;
+
+  // Set response headers
+  res.setHeader("X-Correlation-ID", correlationId);
+  res.setHeader("X-Request-ID", correlationId);
+
   const start = Date.now();
 
-  // ✅ STEP 3: Log AFTER response is sent
-  res.on("finish", () => {
-    const duration = Date.now() - start;
+  // Run the rest of the request lifecycle within the correlation context
+  // The logger's log formatter automatically injects correlation_id from AsyncLocalStorage
+  runWithCorrelation(correlationId, () => {
+    res.on("finish", () => {
+      const durationMs = Date.now() - start;
 
-    // ✅ Required log data
-    const logEntry = {
-      requestId,
-      method: req.method,
-      route: req.originalUrl,
-      statusCode: res.statusCode,
-      duration: `${duration}ms`,
-    };
+      const logEntry = {
+        correlation_id: correlationId,
+        method: req.method,
+        route: req.originalUrl,
+        statusCode: res.statusCode,
+        durationMs,
+      };
 
-    // ✅ STEP 4: Make logs readable in development
-    if (process.env.NODE_ENV === "production") {
-      // Machine-readable (for logging systems)
-      console.log(JSON.stringify(logEntry));
-    } else {
-      // Human-readable (for local dev)
-      console.log(
-        `${req.method} ${req.originalUrl} ${res.statusCode} - ${duration}ms | id=${requestId}`
-      );
-    }
+      const message = "request completed";
+      if (res.statusCode >= 500) {
+        logger.error(logEntry, message);
+      } else if (res.statusCode >= 400) {
+        logger.warn(logEntry, message);
+      } else {
+        logger.info(logEntry, message);
+      }
+    });
+
+    next();
   });
-
-  // ✅ STEP 5: Continue request
-  next();
 }

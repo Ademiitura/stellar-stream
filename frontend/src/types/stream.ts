@@ -1,4 +1,4 @@
-export type StreamStatus = "scheduled" | "active" | "completed" | "canceled";
+export type StreamStatus = "scheduled" | "active" | "paused" | "completed" | "canceled";
 
 export interface StreamProgress {
   status: StreamStatus;
@@ -19,6 +19,10 @@ export interface Stream {
   startAt: number;
   createdAt: number;
   canceledAt?: number;
+  pausedAt?: number;
+  pausedDuration?: number;
+  cliffSeconds?: number;
+  metadata?: Record<string, string> | null;
   progress: StreamProgress;
 }
 
@@ -29,6 +33,16 @@ export interface CreateStreamPayload {
   totalAmount: number;
   durationSeconds: number;
   startAt?: number;
+  cliffSeconds?: number;
+}
+
+export interface CreateSplitStreamPayload {
+  sender: string;
+  assetCode: string;
+  totalAmount: number;
+  durationSeconds: number;
+  startAt?: number;
+  recipients: { address: string; percentage: number }[];
 }
 
 export interface OpenIssue {

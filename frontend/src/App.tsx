@@ -1,129 +1,38 @@
-import { useEffect, useMemo, useState } from "react";
-import { CreateStreamForm } from "./components/CreateStreamForm";
-import { EditStartTimeModal } from "./components/EditStartTimeModal";
-import { IssueBacklog } from "./components/IssueBacklog";
-import { RecipientDashboard } from "./components/RecipientDashboard";
-import { StreamsTable } from "./components/StreamsTable";
-
-import { StreamMetricsChart } from "./components/StreamMetricsChart";
+﻿import { lazy, Suspense, useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { DarkModeToggle } from "./components/DarkModeToggle";
+import { OfflineBanner } from "./components/OfflineBanner";
 import { WalletButton } from "./components/WalletButton";
-import { StreamTimeline } from "./components/StreamTimeline";
 import { useFreighter } from "./hooks/useFreighter";
-import {
-  cancelStream,
-  createStream,
-  listStreams,
-  updateStreamStartAt,
-} from "./services/api";
-import { OpenIssue, Stream } from "./types/stream";
-import { useMetricsHistory } from "./hooks/useMetricsHistory";
-import { useUrlFilters } from "./hooks/useUrlFilters";
+import { useTheme } from "./hooks/useTheme";
+import { DashboardPage } from "./pages/DashboardPage";
 
-type ViewMode = "dashboard" | "recipient" | "sender";
+const SenderDashboard = lazy(() =>
+  import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
+);
+const RecipientDashboard = lazy(() =>
+  import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
+);
 
-// Derive a user-friendly hint string for global (non-form) errors.
-function describeGlobalError(raw: string): string {
-  const lower = raw.toLowerCase();
-  if (
-    lower.includes("network") ||
-    lower.includes("fetch") ||
-    lower.includes("failed to fetch")
-  ) {
-    return "Network error — check that the StellarStream backend is running and reachable.";
-  }
-  if (lower.includes("not found")) {
-    return "The requested stream could not be found. It may have already been cancelled.";
-  }
-  if (lower.includes("cancel")) {
-    return `Unable to cancel stream: ${raw}`;
-  }
-  return raw;
-}
-
-function App() {
+function AppContent() {
   const wallet = useFreighter();
-  const {
-    view: viewMode,
-    filters,
-    streamId: detailStreamId,
-    setView: setViewMode,
-    setFilters,
-    openStream,
-    closeStream,
-  } = useUrlFilters();
-  const [streams, setStreams] = useState<Stream[]>([]);
-  const [issues, setIssues] = useState<OpenIssue[]>([]);
-  const [globalError, setGlobalError] = useState<string | null>(null);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [editingStream, setEditingStream] = useState<{
-    stream: Stream;
-    triggerRef: React.RefObject<HTMLButtonElement | null>;
-  } | null>(null);
-  const [loadingDashboard, setLoadingDashboard] = useState(true);
-  const [initialLoading, setInitialLoading] = useState(true);
+  const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
 
-
-
-  const metrics = useMemo(() => {
-    const activeCount = streams.filter(
-      (s) => s.progress.status === "active",
-    ).length;
-    const completedCount = streams.filter(
-      (s) => s.progress.status === "completed",
-    ).length;
-    const totalVested = streams.reduce(
-      (sum, s) => sum + s.progress.vestedAmount,
-      0,
-    );
-
-    return {
-      total: streams.length,
-      active: activeCount,
-      completed: completedCount,
-      vested: Number(totalVested.toFixed(2)),
-    };
-  }, [streams]);
-
-  const metricsHistory = useMetricsHistory(
-    metrics.active,
-    metrics.completed,
-    metrics.vested,
-    5000,
-  );
-
-  async function handleCreate(
-    payload: Parameters<typeof createStream>[0],
-  ): Promise<void> {
-    setFormError(null);
-    setGlobalError(null);
-    try {
-      await createStream(payload);
-      const data = await listStreams(filters);
-      setStreams(data);
-    } catch (err) {
-      setFormError(
-        err instanceof Error ? err.message : "Failed to create stream.",
-      );
+  useEffect(() => {
+    const path = location.pathname;
+    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+      navigate("/");
     }
-  }
+  }, [location.pathname, navigate]);
 
-  async function handleCancel(streamId: string): Promise<void> {
-    setGlobalError(null);
-    setFormError(null);
-    try {
-      await cancelStream(streamId);
-      const data = await listStreams(filters);
-      setStreams(data);
-    } catch (err) {
-      setGlobalError(
-        err instanceof Error
-          ? describeGlobalError(err.message)
-          : "Failed to cancel the stream. Please try again.",
-      );
-    }
-  }
-
-
+  const currentTab =
+    location.pathname === "/sender"
+      ? "sender"
+      : location.pathname === "/recipient"
+        ? "recipient"
+        : "dashboard";
 
   return (
     <div className="app-shell">
@@ -133,6 +42,9 @@ function App() {
             <p className="eyebrow">Soroban-native MVP</p>
             <h1>StellarStream</h1>
           </div>
+
+          <DarkModeToggle theme={theme} onToggle={toggleTheme} />
+
           <WalletButton wallet={wallet} />
         </div>
         <p className="hero-copy">
@@ -144,120 +56,59 @@ function App() {
       <nav className="app-nav" aria-label="Main">
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "dashboard" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("dashboard")}
+          className={`app-nav-link ${currentTab === "dashboard" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/")}
         >
           Dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "sender" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("sender")}
+          className={`app-nav-link ${currentTab === "sender" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/sender")}
         >
           Sender dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "recipient" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("recipient")}
+          className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/recipient")}
         >
           Recipient dashboard
         </button>
       </nav>
 
-      {viewMode === "sender" ? (
-        <SenderDashboard 
-          senderAddress={wallet.address} 
-          onEditStartTime={(stream) => setEditingStream(stream)}
-        />
-      ) : viewMode === "recipient" ? (
-        <RecipientDashboard recipientAddress={wallet.address} />
-      ) : (
-        <>
-          <section className="metric-grid">
-            <article className="metric-card">
-              <span>Total Streams</span>
-              <strong>{metrics.total}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Active</span>
-              <strong>{metrics.active}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Completed</span>
-              <strong>{metrics.completed}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Total Vested</span>
-              <strong>{metrics.vested}</strong>
-            </article>
-          </section>
+      <OfflineBanner />
 
-          <section className="chart-section">
-            <h2 className="chart-section__title">Stream Metrics Trends</h2>
-            <StreamMetricsChart data={metricsHistory} />
-          </section>
-
-          {/* Global (cancel / bootstrap) errors shown as a dismissible banner */}
-          {globalError && (
-            <div className="error-banner" role="alert" aria-live="assertive">
-              <span className="error-banner__icon" aria-hidden>
-                ✕
-              </span>
-              <span>{globalError}</span>
-              <button
-                className="error-banner__dismiss"
-                type="button"
-                aria-label="Dismiss error"
-                onClick={() => setGlobalError(null)}
-              >
-                ×
-              </button>
-            </div>
-          )}
-
-          <section className="layout-grid">
-            {/* formError is passed into the form so the create-stream card can show it inline */}
-            <CreateStreamForm onCreate={handleCreate} apiError={formError} />
-            <StreamsTable
-              streams={streams}
-              filters={filters}
-              onFiltersChange={setFilters}
-              onCancel={handleCancel}
-              onEditStartTime={(stream, triggerRef) =>
-                setEditingStream({ stream, triggerRef })
-              }
-            />
-          </section>
-
-          <IssueBacklog issues={issues} loading={loadingDashboard} />
-
-          <section className="card" style={{ marginTop: "1rem" }}>
-            <h2 style={{ marginBottom: "1rem" }}>Recent Activity</h2>
-            <StreamTimeline />
-          </section>
-
-          {/* Edit start-time modal — only rendered when a stream is being edited */}
-          {editingStream && (
-            <EditStartTimeModal
-              stream={editingStream.stream}
-              triggerRef={editingStream.triggerRef}
-              onConfirm={handleUpdateStartTime}
-              onClose={() => setEditingStream(null)}
-            />
-          )}
-
-          {/* Stream detail drawer — URL-driven via ?streamId= */}
-          {detailStreamId && (
-            <StreamDetailDrawer
-              streamId={detailStreamId}
-              onClose={closeStream}
-              onCancel={handleCancel}
-            />
-          )}
-        </>
-      )}
+      <Suspense fallback={<div className="app-shell">Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<DashboardPage wallet={wallet} />} />
+          <Route
+            path="/sender"
+            element={<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />}
+          />
+          <Route
+            path="/recipient"
+            element={<RecipientDashboard recipientAddress={wallet.address} />}
+          />
+        </Routes>
+      </Suspense>
     </div>
+  );
+}
+
+function App() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
+
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }
 

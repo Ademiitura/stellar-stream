@@ -7,12 +7,90 @@ import {
 } from "@stellar/stellar-sdk";
 import { recordEventWithDb } from "./eventHistory";
 import { getDb } from "./db";
+import {
+  eventsIndexedTotal,
+  ledgersScannedTotal,
+  lastIndexedLedger,
+  indexerErrorsTotal,
+  indexerCircuitState,
+} from "./metrics";
+import { logger } from "../logger";
 
 let rpcServer: rpc.Server | null = null;
 let contractId: string | null = null;
 let networkPassphrase: string = Networks.TESTNET;
 let lastProcessedLedger = 0;
 let indexerInterval: NodeJS.Timeout | null = null;
+let indexerStartLedger: number | null = null;
+
+export enum CircuitState {
+  CLOSED = "CLOSED",
+  OPEN = "OPEN",
+  HALF_OPEN = "HALF_OPEN",
+}
+
+export class CircuitBreaker {
+  private state: CircuitState = CircuitState.CLOSED;
+  private failureCount: number = 0;
+  private lastFailureTime: number = 0;
+  private readonly failureThreshold: number = 5;
+  private readonly timeoutMs: number;
+
+  constructor(timeoutMs: number = 60000) {
+    this.timeoutMs = timeoutMs;
+  }
+
+  public getState(): CircuitState {
+    if (this.state === CircuitState.OPEN) {
+      const now = Date.now();
+      if (now - this.lastFailureTime >= this.timeoutMs) {
+        this.setState(CircuitState.HALF_OPEN);
+      }
+    }
+    return this.state;
+  }
+
+  public onSuccess(): void {
+    if (this.state !== CircuitState.CLOSED) {
+      logger.info("circuit breaker probe succeeded");
+      this.setState(CircuitState.CLOSED);
+    }
+    this.failureCount = 0;
+  }
+
+  public onFailure(): void {
+    this.failureCount++;
+    this.lastFailureTime = Date.now();
+    
+    if (this.state === CircuitState.CLOSED && this.failureCount >= this.failureThreshold) {
+      logger.warn({ failureThreshold: this.failureThreshold }, "circuit breaker failure threshold reached");
+      this.setState(CircuitState.OPEN);
+    } else if (this.state === CircuitState.HALF_OPEN) {
+      logger.warn("circuit breaker probe failed");
+      this.setState(CircuitState.OPEN);
+    }
+  }
+
+  private setState(newState: CircuitState): void {
+    if (this.state !== newState) {
+      logger.info({ from: this.state, to: newState }, "circuit breaker state changed");
+      this.state = newState;
+    }
+    // Keep gauge in sync whenever state is evaluated
+    const stateValue =
+      newState === CircuitState.CLOSED ? 0
+      : newState === CircuitState.HALF_OPEN ? 1
+      : 2;
+    indexerCircuitState.set(stateValue);
+  }
+}
+
+const CIRCUIT_BREAKER_TIMEOUT_MS = Number(process.env.CIRCUIT_BREAKER_TIMEOUT_MS ?? 60000);
+const circuitBreaker = new CircuitBreaker(CIRCUIT_BREAKER_TIMEOUT_MS);
+
+export function getCircuitBreakerStatus(): CircuitState {
+  return circuitBreaker.getState();
+}
 
 export function initIndexer(
   rpcUrl: string,
@@ -24,6 +102,20 @@ export function initIndexer(
   if (networkPass) {
     networkPassphrase = networkPass;
   }
+
+  // Read INDEXER_START_LEDGER environment variable
+  const startLedgerEnv = process.env.INDEXER_START_LEDGER;
+  if (startLedgerEnv !== undefined) {
+    const startLedger = parseInt(startLedgerEnv, 10);
+    if (!isNaN(startLedger)) {
+      indexerStartLedger = startLedger;
+      if (startLedger !== 0) {
+        logger.warn({ startLedger }, "INDEXER_START_LEDGER override active");
+      }
+    } else {
+      logger.error({ value: startLedgerEnv }, "invalid INDEXER_START_LEDGER value");
+    }
+  }
 }
 
 export function startIndexer(intervalMs = 10000): void {
@@ -31,16 +123,16 @@ export function startIndexer(intervalMs = 10000): void {
     return;
   }
 
-  console.log(`Starting event indexer with ${intervalMs}ms interval`);
+  logger.info({ intervalMs }, "event indexer started");
   indexerInterval = setInterval(() => {
     indexEvents().catch((err) => {
-      console.error("Indexer error:", err);
+      logger.error({ err }, "indexer error");
     });
   }, intervalMs);
 
   // Run immediately on start
   indexEvents().catch((err) => {
-    console.error("Initial indexer error:", err);
+    logger.error({ err }, "initial indexer error");
   });
 }
 
@@ -48,7 +140,7 @@ export function stopIndexer(): void {
   if (indexerInterval) {
     clearInterval(indexerInterval);
     indexerInterval = null;
-    console.log("Event indexer stopped");
+    logger.info("event indexer stopped");
   }
 }
 
@@ -57,26 +149,19 @@ async function indexEvents(): Promise<void> {
     return;
   }
 
+  const state = circuitBreaker.getState();
+  if (state === CircuitState.OPEN) {
+    return;
+  }
+
   try {
     const db = getDb();
     const latestLedger = await rpcServer.getLatestLedger();
     const currentLedger = latestLedger.sequence;
 
-    if (lastProcessedLedger === 0) {
-      // First run - attempt to load last processed ledger from database
-      const row = db
-        .prepare("SELECT last_ledger FROM indexer_cursor WHERE id = ?")
-        .get(contractId) as { last_ledger: number } | undefined;
-
-      if (row) {
-        lastProcessedLedger = row.last_ledger;
-      } else {
-        // Fallback: start from recent history (last 100 ledgers)
-        lastProcessedLedger = Math.max(1, currentLedger - 100);
-      }
-    }
 
     if (currentLedger <= lastProcessedLedger) {
+      circuitBreaker.onSuccess();
       return;
     }
 
@@ -91,20 +176,26 @@ async function indexEvents(): Promise<void> {
       ],
     });
 
+    const startLedger = lastProcessedLedger; // captured before the tx updates it
+
     // Use a transaction to ensure events and cursor are updated atomically.
     // This prevents duplicate events if the process crashes mid-batch.
     db.transaction(() => {
       for (const event of events.events || []) {
         processEvent(db, event);
+        eventsIndexedTotal.inc();
       }
 
       lastProcessedLedger = currentLedger;
-      db.prepare(
-        "INSERT INTO indexer_cursor (id, last_ledger) VALUES (?, ?) ON CONFLICT(id) DO UPDATE SET last_ledger = excluded.last_ledger",
-      ).run(contractId, lastProcessedLedger);
+
     })();
+
+    ledgersScannedTotal.inc(currentLedger - startLedger);
+    circuitBreaker.onSuccess();
   } catch (err) {
-    console.error("Failed to index events:", err);
+    circuitBreaker.onFailure();
+    indexerErrorsTotal.inc();
+    logger.error({ err }, "failed to index events");
   }
 }
 
@@ -138,6 +229,7 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
             startTime: value.start_time,
             endTime: value.end_time,
           },
+          event.ledger,
         );
         break;
 
@@ -149,6 +241,8 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           timestamp,
           value.recipient,
           value.amount,
+          undefined,
+          event.ledger,
         );
         break;
 
@@ -159,10 +253,52 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           "canceled",
           timestamp,
           value.sender,
+          undefined,
+          undefined,
+          event.ledger,
+        );
+        break;
+
+      case "Paused":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "paused",
+          timestamp,
+          value.sender,
+          undefined,
+          undefined,
+          event.ledger,
+        );
+        break;
+
+      case "Resumed":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "resumed",
+          timestamp,
+          value.sender,
+          undefined,
+          undefined,
+          event.ledger,
+        );
+        break;
+
+      case "Transfer":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "transferred",
+          timestamp,
+          value.old_recipient,
+          undefined,
+          { new_recipient: value.new_recipient },
+          event.ledger,
         );
         break;
     }
   } catch (err) {
-    console.error("Failed to process event:", err);
+    logger.error({ err }, "failed to process event");
   }
 }
