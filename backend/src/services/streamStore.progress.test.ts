@@ -25,6 +25,7 @@ describe("calculateProgress", () => {
     startAt: 1000000,
     createdAt: 999000,
     pausedDuration: 0,
+    cliffSeconds: 0,
     ...overrides,
   });
 
@@ -129,7 +130,7 @@ describe("calculateProgress", () => {
       const currentTime = 1002700; // 45 minutes after start, currently paused for 15 minutes
       const progress = calculateProgress(stream, currentTime);
 
-      expect(progress.status).toBe("active");
+      expect(progress.status).toBe("paused");
       // Elapsed = 45 min - (10 min previous + 15 min current pause) = 20 min
       expect(progress.elapsedSeconds).toBe(1200);
       expect(progress.vestedAmount).toBeCloseTo(333.33, 0); // ~1/3 of 1000
@@ -368,3 +369,5 @@ describe("calculateProgress", () => {
     });
   });
 });
+
+

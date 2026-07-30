@@ -1,185 +1,38 @@
-import { useEffect, useMemo, useState, type RefObject } from "react";
-import { CreateStreamForm } from "./components/CreateStreamForm";
-import { EditStartTimeModal } from "./components/EditStartTimeModal";
-import { IssueBacklog } from "./components/IssueBacklog";
+﻿import { lazy, Suspense, useEffect, useState } from "react";
+import { BrowserRouter, Routes, Route, useNavigate, useLocation } from "react-router-dom";
+import { DarkModeToggle } from "./components/DarkModeToggle";
 import { OfflineBanner } from "./components/OfflineBanner";
-import { RecipientDashboard } from "./components/RecipientDashboard";
-import { SenderDashboard } from "./components/SenderDashboard";
-import { StreamDetailDrawer } from "./components/StreamDetailDrawer";
-import { StreamMetricsChart } from "./components/StreamMetricsChart";
-import { StreamTimeline } from "./components/StreamTimeline";
-import { StreamsTable } from "./components/StreamsTable";
 import { WalletButton } from "./components/WalletButton";
 import { useFreighter } from "./hooks/useFreighter";
-import { useMetricsHistory } from "./hooks/useMetricsHistory";
-import { defaultStreamFilters, useStreamFilter } from "./hooks/useStreamFilter";
-import { useToast } from "./hooks/useToast";
-import { useWebSocket } from "./hooks/useWebSocket";
-import {
-  ApiError,
-  cancelStream,
-  createStream,
-  listOpenIssues,
-  listStreams,
-  pauseStream,
-  resumeStream,
-  updateStreamStartAt,
-} from "./services/api";
-import { ListStreamsFilters } from "./services/api";
-import { OpenIssue, Stream } from "./types/stream";
+import { useTheme } from "./hooks/useTheme";
+import { DashboardPage } from "./pages/DashboardPage";
 
-type ViewMode = "dashboard" | "recipient" | "sender";
+const SenderDashboard = lazy(() =>
+  import("./components/SenderDashboard").then((m) => ({ default: m.SenderDashboard })),
+);
+const RecipientDashboard = lazy(() =>
+  import("./components/RecipientDashboard").then((m) => ({ default: m.RecipientDashboard })),
+);
 
-function App() {
+function AppContent() {
   const wallet = useFreighter();
-
-  const [streams, setStreams] = useState<Stream[]>([]);
-  const [issues, setIssues] = useState<OpenIssue[]>([]);
-  const [formError, setFormError] = useState<string | null>(null);
-  const [editingStream, setEditingStream] = useState<{
-    stream: Stream;
-    triggerRef: RefObject<HTMLButtonElement | null>;
-  } | null>(null);
-  const [loadingDashboard, setLoadingDashboard] = useState(true);
-  const [initialLoading, setInitialLoading] = useState(true);
-
-
-  const metrics = useMemo(() => {
-    const activeCount = filteredStreams.filter(
-      (s) => s.progress.status === "active",
-    ).length;
-    const completedCount = filteredStreams.filter(
-      (s) => s.progress.status === "completed",
-    ).length;
-    const totalVested = filteredStreams.reduce(
-      (sum, s) => sum + s.progress.vestedAmount,
-      0,
-    );
-    return {
-      total: filteredStreams.length,
-      active: activeCount,
-      completed: completedCount,
-      vested: Number(totalVested.toFixed(2)),
-    };
-  }, [filteredStreams]);
-
-  const metricsHistory = useMetricsHistory(
-    metrics.active,
-    metrics.completed,
-    metrics.vested,
-    5000,
-  );
+  const { theme, toggleTheme } = useTheme();
+  const navigate = useNavigate();
+  const location = useLocation();
 
   useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    const rawView = params.get("view");
-    const rawStreamId = params.get("streamId");
-    if (rawView === "dashboard" || rawView === "sender" || rawView === "recipient") {
-      setViewMode(rawView);
+    const path = location.pathname;
+    if (path !== "/" && path !== "/sender" && path !== "/recipient") {
+      navigate("/");
     }
-    setDetailStreamId(rawStreamId);
-  }, []);
+  }, [location.pathname, navigate]);
 
-  useEffect(() => {
-    const params = new URLSearchParams(window.location.search);
-    if (viewMode === "dashboard") {
-      params.delete("view");
-    } else {
-      params.set("view", viewMode);
-    }
-    if (detailStreamId) {
-      params.set("streamId", detailStreamId);
-    } else {
-      params.delete("streamId");
-    }
-    const next = params.toString();
-    window.history.replaceState(
-      null,
-      "",
-      next ? `${window.location.pathname}?${next}` : window.location.pathname,
-    );
-  }, [detailStreamId, viewMode]);
-
-  async function refreshStreams(currentFilters: ListStreamsFilters): Promise<void> {
-    const data = await listStreams(currentFilters);
-    setStreams(data);
-  }
-
-  useEffect(() => {
-    setLoadingDashboard(true);
-    refreshStreams(apiFilters)
-      .catch((err: unknown) => {
-        const message =
-          err instanceof ApiError
-            ? `Failed loading streams (${err.statusCode})`
-            : "Failed loading streams";
-        showToast(message, "error");
-      })
-      .finally(() => {
-        setInitialLoading(false);
-        setLoadingDashboard(false);
-      });
-  }, [apiFilters, showToast]);
-
-  useEffect(() => {
-    listOpenIssues()
-      .then(setIssues)
-      .catch(() => undefined);
-  }, []);
-
-  useEffect(() => {
-    if (!lastMessage) return;
-    const eventKind = lastMessage.eventType ?? lastMessage.type ?? "";
-    if (!eventKind) return;
-
-    if (eventKind.includes("created")) {
-      showToast("Stream created", "success");
-    } else if (eventKind.includes("cancel")) {
-      showToast("Stream canceled", "info");
-    } else if (eventKind.includes("complete")) {
-      showToast("Stream completed", "success");
-    }
-    refreshStreams(apiFilters).catch(() => undefined);
-  }, [apiFilters, lastMessage, showToast]);
-
-  async function handleCreate(
-    payload: Parameters<typeof createStream>[0],
-  ): Promise<void> {
-    setFormError(null);
-    try {
-      await createStream(payload);
-      await refreshStreams(apiFilters);
-      showToast("Stream created successfully", "success");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        setFormError(err.message);
-        showToast(`Create failed (${err.statusCode}): ${err.message}`, "error");
-        return;
-      }
-      const fallback = err instanceof Error ? err.message : "Failed to create stream.";
-      setFormError(fallback);
-      showToast(fallback, "error");
-    }
-  }
-
-  async function handleCancel(streamId: string): Promise<void> {
-    try {
-      await cancelStream(streamId);
-      await refreshStreams(apiFilters);
-      showToast("Stream canceled", "info");
-    } catch (err) {
-      if (err instanceof ApiError) {
-        showToast(`Cancel failed (${err.statusCode}): ${err.message}`, "error");
-        return;
-      }
-      showToast(
-        err instanceof Error ? err.message : "Failed to cancel the stream.",
-        "error",
-      );
-    }
-  }
-
-
+  const currentTab =
+    location.pathname === "/sender"
+      ? "sender"
+      : location.pathname === "/recipient"
+        ? "recipient"
+        : "dashboard";
 
   return (
     <div className="app-shell">
@@ -189,18 +42,8 @@ function App() {
             <p className="eyebrow">Soroban-native MVP</p>
             <h1>StellarStream</h1>
           </div>
-          
-          {/* ── ISSUE #159: Theme Toggle Button ── */}
-          <button 
-            type="button" 
-            className="btn-ghost" 
-            onClick={toggleTheme}
-            style={{ marginRight: '0.5rem', fontSize: '1.2rem', minHeight: '36px', display: 'flex', alignItems: 'center' }}
-            aria-label="Toggle Dark Mode"
-          >
-            {theme === 'light' ? '🌙' : '☀️'}
-          </button>
-          {/* ───────────────────────────────────── */}
+
+          <DarkModeToggle theme={theme} onToggle={toggleTheme} />
 
           <WalletButton wallet={wallet} />
         </div>
@@ -213,22 +56,22 @@ function App() {
       <nav className="app-nav" aria-label="Main">
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "dashboard" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("dashboard")}
+          className={`app-nav-link ${currentTab === "dashboard" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/")}
         >
           Dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "sender" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("sender")}
+          className={`app-nav-link ${currentTab === "sender" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/sender")}
         >
           Sender dashboard
         </button>
         <button
           type="button"
-          className={`app-nav-link ${viewMode === "recipient" ? "app-nav-link--active" : ""}`}
-          onClick={() => setViewMode("recipient")}
+          className={`app-nav-link ${currentTab === "recipient" ? "app-nav-link--active" : ""}`}
+          onClick={() => navigate("/recipient")}
         >
           Recipient dashboard
         </button>
@@ -236,92 +79,36 @@ function App() {
 
       <OfflineBanner />
 
-      {viewMode === "sender" ? (
-        <SenderDashboard
-          senderAddress={wallet.address}
-          onEditStartTime={(stream) =>
-            setEditingStream({ stream, triggerRef: { current: null } })
-          }
-        />
-      ) : viewMode === "recipient" ? (
-        <RecipientDashboard recipientAddress={wallet.address} />
-      ) : (
-        <>
-          <section className="metric-grid">
-            <article className="metric-card">
-              <span>Total Streams</span>
-              <strong>{metrics.total}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Active</span>
-              <strong>{metrics.active}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Completed</span>
-              <strong>{metrics.completed}</strong>
-            </article>
-            <article className="metric-card">
-              <span>Total Vested</span>
-              <strong>{metrics.vested}</strong>
-            </article>
-          </section>
-
-          <section className="chart-section">
-            <h2 className="chart-section__title">Stream Metrics Trends</h2>
-            <StreamMetricsChart data={metricsHistory} />
-          </section>
-
-          <section className="layout-grid">
-            <CreateStreamForm
-              onCreate={handleCreate}
-              apiError={formError}
-              walletAddress={wallet.address}
-            />
-            <StreamsTable
-              streams={filteredStreams}
-              filters={tableFilters}
-              onFiltersChange={(next) => {
-                setFilter("status", next.status ?? defaultStreamFilters.status);
-                setFilter("sender", next.sender ?? defaultStreamFilters.sender);
-                setFilter("recipient", next.recipient ?? defaultStreamFilters.recipient);
-                setFilter("assetCode", next.asset ?? defaultStreamFilters.assetCode);
-              }}
-              onCancel={handleCancel}
-              onPause={handlePause}
-              onResume={handleResume}
-              onEditStartTime={(stream, triggerRef) =>
-                setEditingStream({ stream, triggerRef })
-              }
-              onOpenStream={setDetailStreamId}
-            />
-          </section>
-
-          <IssueBacklog issues={issues} loading={loadingDashboard} />
-
-          <section className="card" style={{ marginTop: "1rem" }}>
-            <h2 style={{ marginBottom: "1rem" }}>Recent Activity</h2>
-            <StreamTimeline />
-          </section>
-
-          {editingStream && (
-            <EditStartTimeModal
-              stream={editingStream.stream}
-              triggerRef={editingStream.triggerRef}
-              onConfirm={handleUpdateStartTime}
-              onClose={() => setEditingStream(null)}
-            />
-          )}
-
-          {detailStreamId && (
-            <StreamDetailDrawer
-              streamId={detailStreamId}
-              onClose={() => setDetailStreamId(null)}
-              onCancel={handleCancel}
-            />
-          )}
-        </>
-      )}
+      <Suspense fallback={<div className="app-shell">Loading…</div>}>
+        <Routes>
+          <Route path="/" element={<DashboardPage wallet={wallet} />} />
+          <Route
+            path="/sender"
+            element={<SenderDashboard senderAddress={wallet.address} onEditStartTime={() => {}} />}
+          />
+          <Route
+            path="/recipient"
+            element={<RecipientDashboard recipientAddress={wallet.address} />}
+          />
+        </Routes>
+      </Suspense>
     </div>
+  );
+}
+
+function App() {
+  const [mounted, setMounted] = useState(false);
+
+  useEffect(() => {
+    setMounted(true);
+  }, []);
+
+  if (!mounted) return null;
+
+  return (
+    <BrowserRouter>
+      <AppContent />
+    </BrowserRouter>
   );
 }
 

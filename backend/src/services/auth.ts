@@ -10,6 +10,7 @@ import jwt from "jsonwebtoken";
 import crypto from "crypto";
 import { Request, Response, NextFunction } from "express";
 import { sendApiError } from "../apiErrors";
+import { logger } from "../logger";
 
 const HORIZON_URL = (process.env.HORIZON_URL || "https://horizon-testnet.stellar.org").trim();
 
@@ -44,8 +45,12 @@ if (!jwtSecret) {
 
   jwtSecret = crypto.randomBytes(32).toString("hex");
 
-  console.warn(
+  logger.warn(
     "JWT_SECRET not set — using ephemeral secret. All tokens will be invalidated on restart.",
+  );
+} else {
+  logger.warn(
+    "JWT_SECRET is configured. Rotating this secret will invalidate all existing tokens and force all users to re-authenticate.",
   );
 }
 
@@ -263,9 +268,15 @@ export async function verifyChallengeAndIssueToken(
     return token;
   } catch (error: any) {
     if (error.message?.includes("TimeBounds")) {
-      throw new Error("Challenge has expired. Please request a new one.");
+      const err = new Error("Challenge has expired. Please request a new one.");
+      (err as any).statusCode = 401;
+      (err as any).code = "UNAUTHORIZED";
+      throw err;
     }
-    throw new Error(`Challenge verification failed: ${error.message}`);
+    const err = new Error(`Challenge verification failed: ${error.message}`);
+    (err as any).statusCode = 401;
+    (err as any).code = "UNAUTHORIZED";
+    throw err;
   }
 }
 
@@ -322,6 +333,45 @@ export function authMiddleware(
 
   try {
     const decoded = jwt.verify(token, getJwtSecret()) as AuthUser;
+    (req as any).user = decoded; // Attach user to request
+    next();
+  } catch (error: any) {
+    if (error.name === "TokenExpiredError") {
+      sendApiError(req, res, 401, "Authorization token has expired.", {
+        code: "token_expired",
+      });
+    } else {
+      sendApiError(req, res, 401, "Invalid authorization token.", {
+        code: "invalid_token",
+      });
+    }
+  }
+}
+
+export function adminJwtAuth(
+  req: Request,
+  res: Response,
+  next: NextFunction,
+) {
+  const authHeader = req.headers.authorization;
+
+  if (!authHeader || !authHeader.startsWith("Bearer ")) {
+    sendApiError(req, res, 401, "Missing or invalid authorization header.", {
+      code: "unauthorized",
+    });
+    return;
+  }
+
+  const token = authHeader.split(" ")[1];
+
+  try {
+    const decoded = jwt.verify(token, getJwtSecret()) as any;
+    if (decoded.role !== "admin" && decoded.accountId !== "admin" && !decoded.isAdmin) {
+      sendApiError(req, res, 403, "Forbidden: Admin access required.", {
+        code: "forbidden",
+      });
+      return;
+    }
     (req as any).user = decoded; // Attach user to request
     next();
   } catch (error: any) {

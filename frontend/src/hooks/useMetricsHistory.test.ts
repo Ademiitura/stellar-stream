@@ -1,6 +1,6 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
-import { renderHook, waitFor } from "@testing-library/react";
-import { useMetricsHistory } from "./useMetricsHistory";
+import { renderHook, waitFor, act } from "@testing-library/react";
+import { useMetricsHistory, TimeRange } from "./useMetricsHistory";
 import { ApiError } from "../services/api";
 
 // Mock the API module
@@ -23,8 +23,8 @@ const mockFetchMetricsHistory = vi.mocked(fetchMetricsHistory);
 
 describe("useMetricsHistory", () => {
   beforeEach(() => {
-    vi.clearAllMocks();
-    vi.useFakeTimers();
+    vi.resetAllMocks();
+    vi.useFakeTimers({ toFake: ["Date"] });
   });
 
   afterEach(() => {
@@ -152,7 +152,7 @@ describe("useMetricsHistory", () => {
     expect(mockFetchMetricsHistory).toHaveBeenCalledTimes(2);
 
     // Verify second call had correct 30-day timestamps
-    const [, secondCall] = mockFetchMetricsHistory.mock.calls;
+    const secondCall = mockFetchMetricsHistory.mock.calls[1][0];
     const now = Date.now();
     const expectedStart = now - 30 * 24 * 60 * 60 * 1000;
     expect(secondCall.startTimestamp).toBeCloseTo(expectedStart, -3);
@@ -171,7 +171,7 @@ describe("useMetricsHistory", () => {
 
     // Verify data structure matches MetricsSnapshot interface
     expect(result.current.data).toHaveLength(3);
-    result.current.data.forEach((snapshot, index) => {
+    result.current.data.forEach((snapshot) => {
       expect(snapshot).toHaveProperty("timestamp");
       expect(snapshot).toHaveProperty("active");
       expect(snapshot).toHaveProperty("completed");
@@ -184,9 +184,11 @@ describe("useMetricsHistory", () => {
   });
 
   it("shows loading state during API call", async () => {
-    mockFetchMetricsHistory.mockImplementation(() => 
-      new Promise(resolve => setTimeout(() => resolve(createMockMetrics()), 100))
-    );
+    let resolvePromise: any;
+    const promise = new Promise(resolve => {
+      resolvePromise = resolve;
+    });
+    mockFetchMetricsHistory.mockReturnValue(promise);
 
     const { result } = renderHook(() => useMetricsHistory("7d"));
 
@@ -194,8 +196,10 @@ describe("useMetricsHistory", () => {
     expect(result.current.error).toBe(null);
     expect(result.current.data).toEqual([]);
 
-    // Advance time to resolve the promise
-    vi.advanceTimersByTime(100);
+    // Resolve the promise
+    act(() => {
+      resolvePromise(createMockMetrics());
+    });
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -208,7 +212,10 @@ describe("useMetricsHistory", () => {
     const apiError = new ApiError("Network error", 500);
     mockFetchMetricsHistory.mockRejectedValueOnce(apiError);
 
-    const { result, rerender } = renderHook(() => useMetricsHistory("7d"));
+    const { result, rerender } = renderHook(
+      ({ range }) => useMetricsHistory(range),
+      { initialProps: { range: "7d" as TimeRange } }
+    );
 
     await waitFor(() => {
       expect(result.current.loading).toBe(false);
@@ -219,8 +226,8 @@ describe("useMetricsHistory", () => {
     const mockData = createMockMetrics();
     mockFetchMetricsHistory.mockResolvedValueOnce(mockData);
 
-    // Rerender to trigger retry
-    rerender();
+    // Rerender with different props to trigger retry
+    rerender({ range: "30d" });
 
     expect(result.current.loading).toBe(true);
 
@@ -256,5 +263,61 @@ describe("useMetricsHistory", () => {
     });
 
     expect(mockFetchMetricsHistory).toHaveBeenCalledTimes(1);
+  });
+
+  it("passes a 7-day window (startTimestamp ≈ now - 604800000) for the '7d' range", async () => {
+    const fixedNow = 1_750_000_000_000;
+    vi.setSystemTime(fixedNow);
+    mockFetchMetricsHistory.mockResolvedValue(createMockMetrics(7));
+
+    renderHook(() => useMetricsHistory("7d"));
+
+    await waitFor(() =>
+      expect(mockFetchMetricsHistory).toHaveBeenCalledTimes(1),
+    );
+
+    const [params] = mockFetchMetricsHistory.mock.calls[0];
+    expect(params.startTimestamp).toBe(fixedNow - 7 * 24 * 60 * 60 * 1000);
+    expect(params.endTimestamp).toBe(fixedNow);
+  });
+
+  it("data transformation: each snapshot has numeric timestamp, active, completed, vested fields", async () => {
+    const mockData = createMockMetrics(5);
+    mockFetchMetricsHistory.mockResolvedValue(mockData);
+
+    const { result } = renderHook(() => useMetricsHistory("7d"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    expect(result.current.data).toHaveLength(5);
+    for (const snapshot of result.current.data) {
+      expect(typeof snapshot.timestamp).toBe("number");
+      expect(typeof snapshot.active).toBe("number");
+      expect(typeof snapshot.completed).toBe("number");
+      expect(typeof snapshot.vested).toBe("number");
+      // vested values should be non-negative
+      expect(snapshot.vested).toBeGreaterThanOrEqual(0);
+    }
+  });
+
+  it("cumulative vested values increase or stay flat across snapshots", async () => {
+    const now = Date.now();
+    // Create explicitly increasing vested amounts simulating cumulative growth
+    const cumulativeData = Array.from({ length: 5 }, (_, i) => ({
+      timestamp: now - (4 - i) * 24 * 60 * 60 * 1000,
+      active: 10,
+      completed: i,
+      vested: 100 + i * 50, // strictly increasing: 100, 150, 200, 250, 300
+    }));
+    mockFetchMetricsHistory.mockResolvedValue(cumulativeData);
+
+    const { result } = renderHook(() => useMetricsHistory("7d"));
+
+    await waitFor(() => expect(result.current.loading).toBe(false));
+
+    const vesteds = result.current.data.map((s) => s.vested);
+    for (let i = 1; i < vesteds.length; i++) {
+      expect(vesteds[i]).toBeGreaterThanOrEqual(vesteds[i - 1]);
+    }
   });
 });

@@ -24,6 +24,7 @@ const mockState = vi.hoisted(() => ({
 const dbMocks = vi.hoisted(() => ({
   initDb: vi.fn(),
   getDb: vi.fn(),
+  syncFtsIndex: vi.fn(),
 }));
 
 const eventHistoryMocks = vi.hoisted(() => ({
@@ -33,11 +34,21 @@ const eventHistoryMocks = vi.hoisted(() => ({
   }),
 }));
 
+const loggerMocks = vi.hoisted(() => ({
+  logger: {
+    info: vi.fn(),
+    warn: vi.fn(),
+    error: vi.fn(),
+    debug: vi.fn(),
+  },
+}));
+
 vi.mock("./db", () => dbMocks);
 vi.mock("./eventHistory", () => eventHistoryMocks);
 vi.mock("./webhook", () => ({
   triggerWebhook: vi.fn(),
 }));
+vi.mock("../logger", () => loggerMocks);
 
 vi.mock("@stellar/stellar-sdk", () => {
   class MockContract {
@@ -272,7 +283,7 @@ describe("reconcileMissingStreams", () => {
     mockState.nextId = 3;
     mockState.existingStreamIds = new Set(["1"]);
 
-    const errorSpy = vi.spyOn(console, "error").mockImplementation(() => undefined);
+    const errorSpy = loggerMocks.logger.error;
 
     const { initSoroban, reconcileMissingStreams } = await import("./streamStore");
 
@@ -281,11 +292,12 @@ describe("reconcileMissingStreams", () => {
 
     expect(repaired).toBe(0);
     expect(errorSpy).toHaveBeenCalledWith(
-      "[reconciliation] missing stream 2 could not be fetched from chain",
+      { streamId: 2 },
+      "missing stream could not be fetched from chain",
     );
     expect(eventHistoryMocks.recordEventWithDb).not.toHaveBeenCalled();
 
-    errorSpy.mockRestore();
+    errorSpy.mockClear();
   });
 });
 
@@ -710,5 +722,69 @@ it("handles multiple streams in a single transaction", async () => {
     streams.forEach(stream => {
       expect(stream.archived_at).toBeGreaterThan(0);
     });
+  });
+});
+
+describe("metadata round-trip", () => {
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+
+    mockState.nextId = 2;
+    mockState.existingStreamIds = new Set<string>();
+    mockState.chainStreams = new Map<number, any>();
+    mockState.upsertedStreams = [];
+    mockState.createdEventIds = new Set<string>();
+
+    dbMocks.initDb.mockImplementation(() => undefined);
+
+    process.env.CONTRACT_ID = "test-contract";
+    process.env.RPC_URL = "https://rpc.test";
+    delete process.env.SERVER_PRIVATE_KEY;
+  });
+
+  it("syncStreams reads metadata from on-chain stream and stores it as JSON", async () => {
+    mockState.nextId = 2;
+    mockState.chainStreams.set(1, {
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      token: "USDC",
+      total_amount: 1000,
+      start_time: 0,
+      end_time: 1000,
+      canceled: false,
+      metadata: { purpose: "salary", project: "apollo" },
+    });
+
+    let storedMetadata: string | null = null;
+    const dbMock = {
+      prepare(sql: string) {
+        if (sql.includes("SELECT id FROM streams")) {
+          return { all: () => [] };
+        }
+        if (sql.includes("INSERT INTO streams")) {
+          return {
+            run: (params: any) => {
+              mockState.existingStreamIds.add(params.id);
+              storedMetadata = params.metadata;
+              return { changes: 1 };
+            },
+          };
+        }
+        throw new Error(`Unexpected SQL: ${sql}`);
+      },
+      transaction<T extends (...args: any[]) => any>(callback: T): T {
+        return ((...args: Parameters<T>) => callback(...args)) as T;
+      },
+    };
+    dbMocks.getDb.mockReturnValue(dbMock);
+
+    const { initSoroban, syncStreams } = await import("./streamStore");
+    await initSoroban();
+    await syncStreams();
+
+    expect(storedMetadata).not.toBeNull();
+    const parsed = JSON.parse(storedMetadata!);
+    expect(parsed).toEqual({ purpose: "salary", project: "apollo" });
   });
 });

@@ -98,6 +98,8 @@ function getEventIcon(eventType: string): string {
     case "claimed":            return "💸";
     case "canceled":           return "❌";
     case "start_time_updated": return "🕐";
+    case "paused":             return "⏸️";
+    case "resumed":            return "▶️";
     default:                   return "📋";
   }
 }
@@ -112,6 +114,10 @@ function formatEventTitle(eventType: string): string {
       return "Stream canceled";
     case "start_time_updated":
       return "Start time updated";
+    case "paused":
+      return "Stream paused";
+    case "resumed":
+      return "Stream resumed";
     default:
       return "Stream event";
   }
@@ -130,6 +136,10 @@ function getEventDescription(event: StreamEvent): string {
       return `Closed by ${actor}`;
     case "start_time_updated":
       return `New start time set by ${actor}`;
+    case "paused":
+      return `Stream paused by ${actor}`;
+    case "resumed":
+      return `Stream resumed by ${actor}`;
     default:
       return `Action performed by ${actor}`;
   }

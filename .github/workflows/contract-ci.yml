@@ -14,6 +14,8 @@ jobs:
   contract-test:
     name: Build and test Soroban contract
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     defaults:
       run:
         working-directory: contracts
@@ -41,7 +43,35 @@ jobs:
       - name: Check contract formatting
         run: cargo fmt --all -- --check
 
+      - name: Run clippy
+        run: cargo clippy --all-targets --all-features -- -D warnings
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Run cargo audit (contracts)
+        working-directory: contracts
+        run: |
+          cargo audit --json > cargo-audit-report.json || true
+          cargo audit
+
+      - name: Upload cargo audit report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: cargo-audit-report
+          path: contracts/cargo-audit-report.json
+          retention-days: 30
+
       - name: Run contract tests
         env:
           RUSTFLAGS: "-D warnings"
         run: cargo test --locked
+
+      - name: Build WASM binary and report size
+        run: |
+          cargo build --target wasm32-unknown-unknown --release
+          SIZE=$(wc -c < target/wasm32-unknown-unknown/release/stellar_stream.wasm)
+          echo "WASM Binary Size: ${SIZE} bytes ($(numfmt --to=iec ${SIZE}))"
+          echo "## WASM Binary Size" >> $GITHUB_STEP_SUMMARY
+          echo "**$(numfmt --to=iec ${SIZE})** (${SIZE} bytes)" >> $GITHUB_STEP_SUMMARY

@@ -1,6 +1,6 @@
 import { getDb } from "./db";
 
-export type StreamEventType = "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "completed";
+export type StreamEventType = "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "completed" | "transferred";
 
 export interface StreamEvent {
   id: number;
@@ -79,11 +79,12 @@ export function recordEventWithDb(
   });
 }
 
-export function getStreamHistory(streamId: string, limit = 50, offset = 0): StreamEvent[] {
+export function getStreamHistory(streamId: string, limit = 20, offset = 0, order: 'asc' | 'desc' = 'desc'): StreamEvent[] {
   const db = getDb();
+  const orderClause = order === 'asc' ? 'ASC' : 'DESC';
   const rows = db
     .prepare(
-      `SELECT * FROM stream_events WHERE stream_id = ? ORDER BY timestamp ASC, id ASC LIMIT ? OFFSET ?`,
+      `SELECT * FROM stream_events WHERE stream_id = ? ORDER BY timestamp ${orderClause}, id ${orderClause} LIMIT ? OFFSET ?`,
     )
     .all(streamId, limit, offset) as EventRow[];
   return rows.map(rowToEvent);
@@ -111,37 +112,74 @@ export function getGlobalEvents(
   offset: number,
   eventType?: StreamEventType,
   cursor?: number,
+  streamId?: string,
+  since?: number,
 ): StreamEvent[] {
   const db = getDb();
+  const conditions: string[] = [];
+  const params: any[] = [];
+
   if (eventType) {
-    let query = `SELECT * FROM stream_events WHERE event_type = ?`;
-    const params: any[] = [eventType];
-
-    if (cursor !== undefined) {
-      query += ` AND id < ?`;
-      params.push(cursor);
-    }
-
-    query += ` ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?`;
-    params.push(limit, offset);
-
-    const rows = db.prepare(query).all(...params) as EventRow[];
-    return rows.map(rowToEvent);
+    conditions.push("event_type = ?");
+    params.push(eventType);
   }
-  return getAllEvents(limit, offset, cursor);
+
+  if (cursor !== undefined) {
+    conditions.push("id < ?");
+    params.push(cursor);
+  }
+
+  if (streamId) {
+    conditions.push("stream_id = ?");
+    params.push(streamId);
+  }
+
+  if (since !== undefined) {
+    conditions.push("timestamp > ?");
+    params.push(since);
+  }
+
+  let query = "SELECT * FROM stream_events";
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+  query += " ORDER BY timestamp DESC, id DESC LIMIT ? OFFSET ?";
+  params.push(limit, offset);
+
+  const rows = db.prepare(query).all(...params) as EventRow[];
+  return rows.map(rowToEvent);
 }
 
-export function countAllEvents(eventType?: StreamEventType): number {
+export function countAllEvents(
+  eventType?: StreamEventType,
+  streamId?: string,
+  since?: number,
+): number {
   const db = getDb();
+  const conditions: string[] = [];
+  const params: any[] = [];
+
   if (eventType) {
-    const row = db
-      .prepare(`SELECT COUNT(*) as count FROM stream_events WHERE event_type = ?`)
-      .get(eventType) as { count: number };
-    return row.count;
+    conditions.push("event_type = ?");
+    params.push(eventType);
   }
-  const row = db
-    .prepare(`SELECT COUNT(*) as count FROM stream_events`)
-    .get() as { count: number };
+
+  if (streamId) {
+    conditions.push("stream_id = ?");
+    params.push(streamId);
+  }
+
+  if (since !== undefined) {
+    conditions.push("timestamp > ?");
+    params.push(since);
+  }
+
+  let query = "SELECT COUNT(*) as count FROM stream_events";
+  if (conditions.length > 0) {
+    query += " WHERE " + conditions.join(" AND ");
+  }
+
+  const row = db.prepare(query).get(...params) as { count: number };
   return row.count;
 }
 

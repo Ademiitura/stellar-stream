@@ -12,6 +12,14 @@ const DEFAULT_STALE_AFTER_MS = 4000;
 
 const API_BASE = import.meta.env.VITE_API_URL ?? "/api";
 
+export function getWebSocketUrl(): string {
+  // Construct WebSocket URL from API base URL
+  const apiUrl = import.meta.env.VITE_API_URL || window.location.origin + "/api";
+  const wsProtocol = apiUrl.startsWith("https") ? "wss" : "ws";
+  const wsUrl = apiUrl.replace(/^https?:\/\//, "").replace(/\/api$/, "");
+  return `${wsProtocol}://${wsUrl}/api/ws`;
+}
+
 let authToken: string | null = null;
 export function setAuthToken(token: string | null) {
   authToken = token;
@@ -109,24 +117,35 @@ export interface ListStreamsFilters {
   status?: string;
   asset?: string;
   q?: string;
+  sort?: string;
+  page?: number;
+  limit?: number;
 }
 
-export async function listStreams(filters?: ListStreamsFilters): Promise<Stream[]> {
+export interface PaginatedResult<T> {
+  data: T[];
+  total: number;
+  page: number;
+  limit: number;
+}
+
+export async function listStreams(filters?: ListStreamsFilters): Promise<PaginatedResult<Stream>> {
   const params = new URLSearchParams();
   if (filters?.recipient) params.set("recipient", filters.recipient);
   if (filters?.sender) params.set("sender", filters.sender);
   if (filters?.status) params.set("status", filters.status);
   if (filters?.asset) params.set("asset", filters.asset);
   if (filters?.q) params.set("q", filters.q);
+  if (filters?.sort) params.set("sort", filters.sort);
+  if (filters?.page) params.set("page", String(filters.page));
+  if (filters?.limit) params.set("limit", String(filters.limit));
 
   const q = params.toString();
   const url = q ? `${API_BASE}/streams?${q}` : `${API_BASE}/streams`;
 
-  return fetchWithCache(url, async () => {
-    const response = await fetch(url);
-    const body = await parseResponse<{ data: Stream[] }>(response);
-    return body.data;
-  });
+  const response = await fetch(url);
+  const body = await parseResponse<{ data: Stream[]; total: number; page: number; limit: number }>(response);
+  return body;
 }
 
 export async function listRecipientStreams(accountId: string): Promise<Stream[]> {
@@ -166,6 +185,30 @@ export async function createStream(
     body: JSON.stringify(payload),
   });
   const body = await parseResponse<{ data: Stream }>(response);
+  return body.data;
+}
+
+export interface StreamFeeEstimate {
+  feeStroops: number;
+  feeXlm: string;
+}
+
+export async function estimateCreateStreamFee(
+  payload: CreateStreamPayload,
+): Promise<StreamFeeEstimate> {
+  const headers: Record<string, string> = {
+    "Content-Type": "application/json",
+  };
+  if (authToken) {
+    headers["Authorization"] = `Bearer ${authToken}`;
+  }
+
+  const response = await fetch(`${API_BASE}/streams/fee-estimate`, {
+    method: "POST",
+    headers,
+    body: JSON.stringify(payload),
+  });
+  const body = await parseResponse<{ data: StreamFeeEstimate }>(response);
   return body.data;
 }
 
@@ -240,10 +283,11 @@ export async function listOpenIssues(): Promise<OpenIssue[]> {
 export interface StreamEvent {
   id: number;
   streamId: string;
-  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed";
+  eventType: "created" | "claimed" | "canceled" | "start_time_updated" | "paused" | "resumed" | "cliff_reached";
   timestamp: number;
   actor?: string;
   amount?: number;
+  txHash?: string;
   metadata?: Record<string, any>;
 }
 
@@ -271,13 +315,92 @@ export async function fetchMetricsHistory(params: MetricsHistoryParams): Promise
     start: params.startTimestamp.toString(),
     end: params.endTimestamp.toString(),
   });
-  
+
   const response = await fetch(`${API_BASE}/metrics/history?${searchParams}`);
   const body = await parseResponse<{ data: any[] }>(response);
   return body.data;
 }
 
+export interface StreamStats {
+  total_streams: number;
+  active_streams: number;
+  completed_streams: number;
+  canceled_streams: number;
+  total_vested: number;
+  avg_duration_seconds: number;
+  unique_senders: number;
+  unique_recipients: number;
+}
+
+export async function fetchStats(): Promise<StreamStats> {
+  const response = await fetch(`${API_BASE}/stats`);
+  const body = await parseResponse<{ data: StreamStats }>(response);
+  return body.data;
+}
+export async function getStream(streamId: string, signal?: AbortSignal): Promise<Stream> {
+  const url = `${API_BASE}/streams/${encodeURIComponent(streamId)}`;
+  if (signal) {
+    const response = await fetch(url, { signal });
+    const body = await parseResponse<{ data: Stream }>(response);
+    return body.data;
+  }
+  return fetchWithCache(url, async () => {
+    const response = await fetch(url);
+    const body = await parseResponse<{ data: Stream }>(response);
+    return body.data;
+  });
+}
+
+export interface AppConfig {
+  allowedAssets: string[];
+}
+
+export async function getConfig(): Promise<AppConfig> {
+  const response = await fetch(`${API_BASE}/config`);
+  return parseResponse<AppConfig>(response);
+}
+
+/**
+ * Fetches recent events for a sender across all their streams.
+ * Aggregates events from all sender's streams and returns them sorted by timestamp (newest first).
+ * 
+ * @param senderAddress - The sender's wallet address
+ * @param limit - Maximum number of events to return (default: 10)
+ * @returns Array of StreamEvents sorted by timestamp descending
+ */
+export async function getSenderEvents(senderAddress: string, limit: number = 10): Promise<StreamEvent[]> {
+  try {
+    // First get all streams for the sender
+    const streamsResult = await listStreams({ sender: senderAddress });
+    const streams = streamsResult.data;
+
+    if (streams.length === 0) {
+      return [];
+    }
+
+    // Fetch events from each stream
+    const allEvents: StreamEvent[] = [];
+    const eventPromises = streams.map((stream) =>
+      getStreamHistory(stream.id)
+        .then((events) => allEvents.push(...events))
+        .catch(() => {
+          // Silent fail on individual stream event fetch
+        })
+    );
+
+    await Promise.all(eventPromises);
+
+    // Sort by timestamp descending (most recent first) and limit
+    return allEvents
+      .sort((a, b) => b.timestamp - a.timestamp)
+      .slice(0, limit);
+  } catch {
+    return [];
+  }
+}
+
 export function clearCache() {
   cache.clear();
 }
+
 
