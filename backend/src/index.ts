@@ -42,7 +42,9 @@ import { startReconciliationJob } from "./services/reconciliationJob";
 import { startArchiveJob } from "./services/archiveJob";
 import { startStreamProgressBroadcaster } from "./services/streamProgressBroadcaster";
 import { startWebhookWorker } from "./services/webhookWorker";
+import { startDeadLetterPruningJob } from "./services/webhookDeadLetterPruningJob";
 import {
+  clearDeadLetters,
   getDeadLetters,
   countDeadLetters,
   requeueDeadLetter,
@@ -1873,6 +1875,34 @@ app.post(
   },
 );
 
+app.delete(
+  "/api/admin/webhooks/dead-letters",
+  adminAuth,
+  (req: Request, res: Response) => {
+    try {
+      const deleted = clearDeadLetters();
+      res.json({
+        success: true,
+        deleted,
+        message: "Webhook dead-letter queue cleared successfully",
+      });
+    } catch (error: any) {
+      logger.error({ err: error }, "failed to clear webhook dead-letter queue");
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to clear webhook dead-letter queue.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "INTERNAL_ERROR" },
+      );
+    }
+  },
+);
+
 async function startServer() {
   const config = validateEnv();
 
@@ -1890,6 +1920,7 @@ async function startServer() {
   }
 
   startArchiveJob(config.archiveCronIntervalMs);
+  startDeadLetterPruningJob(config.webhookDeadLetterPruneIntervalMs);
   startStreamProgressBroadcaster(5000);
 
   const server = createServer(app);
