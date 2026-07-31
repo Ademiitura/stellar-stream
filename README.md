@@ -1,5 +1,11 @@
 # StellarStream
 
+[![English](https://img.shields.io/badge/lang-en-red.svg)](README.md)
+[![Español](https://img.shields.io/badge/lang-es-green.svg)](docs/README.es.md)
+[![Português](https://img.shields.io/badge/lang-pt--br-blue.svg)](docs/README.pt.md)
+
+> **Translation lag notice:** Translations are community-contributed and may lag behind the English version by up to one release cycle. The English [`README.md`](README.md) is the authoritative source.
+
 StellarStream is a basic payment-streaming MVP for the Stellar ecosystem.
 It includes:
 * A React dashboard to create and monitor streams
