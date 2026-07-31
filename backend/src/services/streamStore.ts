@@ -68,6 +68,8 @@ export interface StreamProgress {
   percentComplete: number;
 }
 
+export type StreamWithProgress = StreamRecord & StreamProgress & { archived_at?: number | null };
+
 export type SortField = "totalAmount" | "startAt" | "createdAt" | "durationSeconds";
 export type SortOrder = "asc" | "desc";
 
@@ -229,7 +231,6 @@ async function invalidateCache(pattern?: string): Promise<void> {
     await getCache().del(pattern);
   }
 }
-
 
 function getSorobanContext():
   | {
@@ -447,15 +448,9 @@ export function calculateProgress(
   stream: StreamRecord,
   at = nowInSeconds(),
 ): StreamProgress {
-  const streamEnd = stream.startAt + stream.durationSeconds;
-
-  // When paused, vesting is frozen at the moment of pause.
   const effectiveAt =
     stream.pausedAt !== undefined ? Math.min(at, stream.pausedAt) : at;
 
-  const elapsed = Math.max(0, Math.min(effectiveAt - stream.startAt - stream.pausedDuration, stream.durationSeconds));
-
-  const ratio = Math.min(1, elapsed / stream.durationSeconds);
   const elapsed = Math.max(0, Math.max(0, effectiveAt - stream.startAt) - stream.pausedDuration);
   const ratio = stream.durationSeconds <= 0 ? 1 : Math.min(1, elapsed / stream.durationSeconds);
   const elapsedSeconds = stream.durationSeconds <= 0 ? 0 : Math.min(elapsed, stream.durationSeconds);
@@ -566,7 +561,6 @@ export async function getOnChainClaimableBatch(
     ? parseInt(latestLedger.timestamp, 10)
     : Math.floor(Date.now() / 1000);
 
-  // Split into chunks of MAX_CLAIMABLE_BATCH_SIZE
   const chunks: string[][] = [];
   for (let i = 0; i < ids.length; i += MAX_CLAIMABLE_BATCH_SIZE) {
     chunks.push(ids.slice(i, i + MAX_CLAIMABLE_BATCH_SIZE));
@@ -642,8 +636,6 @@ export async function syncStreams() {
 
     const ids = Array.from({ length: nextId - 1 }, (_, i) => i + 1);
 
-    // Concurrency-limited parallel fetch â€” max 5 simultaneous RPC calls.
-    // Falls back to sequential per-stream if the parallel pass throws.
     const limit = pLimit(5);
     let parallelFailed = false;
 
@@ -687,14 +679,6 @@ export async function syncStreams() {
   }
 }
 
-/**
- * Reconciles a single stream's on-chain state with local SQLite.
- * Forces an immediate Soroban get_stream call and updates the local record.
- * @async
- * @param {string} streamId - The stream ID to reconcile
- * @returns {Promise<StreamRecord>} The updated stream record
- * @throws {Error} If stream not found on-chain or Soroban not configured
- */
 export async function reconcileStream(streamId: string): Promise<StreamRecord> {
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) {
@@ -712,14 +696,13 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
       sorobanContext.contract,
       sourceAccount,
       id,
-      true, // bypass cache to force fresh Soroban call
+      true,
     );
 
     if (!onChainStream) {
       throw new Error("Stream not found on-chain");
     }
 
-    // Update local SQLite with on-chain state
     upsertStream(onChainStream);
 
     logger.info({ streamId }, "stream reconciled with on-chain state");
@@ -730,13 +713,6 @@ export async function reconcileStream(streamId: string): Promise<StreamRecord> {
   }
 }
 
-/**
- * Reconciles missing streams by comparing local database with on-chain state.
- * Backfills any streams that exist on-chain but not locally.
- * Records "created" events for backfilled streams.
- * @async
- * @returns {Promise<number>} Number of streams repaired
- */
 export async function reconcileMissingStreams(): Promise<number> {
   const sorobanContext = getSorobanContext();
   if (!sorobanContext) {
@@ -801,15 +777,6 @@ export async function reconcileMissingStreams(): Promise<number> {
   }
 }
 
-/**
- * Creates a new stream on-chain and persists it locally.
- * Sends transaction to Soroban contract and records "created" event.
- * Triggers webhook notification after successful persistence.
- * @async
- * @param {StreamInput} input - Stream creation parameters (sender, recipient, amount, duration, etc.)
- * @returns {Promise<StreamRecord>} The created stream record
- * @throws {Error} If Soroban is not configured or transaction fails
- */
 export async function createStream(input: StreamInput): Promise<StreamRecord> {
   const startAt = input.startAt ?? nowInSeconds();
   const contractId = process.env.CONTRACT_ID;
@@ -823,7 +790,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
   const sourceAccount = await rpcServer.getAccount(serverKeypair.publicKey());
   const tx = createStreamOperation(contractId, input, startAt);
 
-  // We have to build and send this tx. Wait, doing this properly via building is long:
   const built = await rpcServer.prepareTransaction(
     new TransactionBuilder(sourceAccount, {
       fee: "1000",
@@ -870,7 +836,6 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     cliffSeconds: input.cliffSeconds ?? 0,
   };
 
-  // Atomically write the stream row and the creation event.
   const db = getDb();
   db.transaction(() => {
     upsertStream(stream);
@@ -889,15 +854,12 @@ export async function createStream(input: StreamInput): Promise<StreamRecord> {
     );
   })();
 
-  // Invalidate cache to ensure freshness after stream creation
   await invalidateCache("stream:");
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
   resetStreamMetricsCache();
 
-  // Webhook fires after the transaction commits â€” a webhook failure
-  // must never roll back an already-persisted stream.
   triggerWebhook("created", stream);
   return stream;
 }
@@ -933,11 +895,9 @@ export async function estimateCreateStreamFee(input: StreamInput): Promise<Strea
   };
 }
 
-
 export function refreshStreamStatuses(): number {
   const db = getDb();
   const now = nowInSeconds();
-
 
   const toComplete = db.prepare(`
     SELECT * FROM streams 
@@ -945,20 +905,17 @@ export function refreshStreamStatuses(): number {
       AND (start_at + duration_seconds) <= ?
   `).all() as StreamRow[];
 
-
   const result = db.prepare(`
     UPDATE streams SET completed_at = ?
     WHERE canceled_at IS NULL AND completed_at IS NULL AND paused_at IS NULL
       AND (start_at + duration_seconds) <= ?
   `).run(now, now);
 
-
   toComplete.forEach(row => {
     const record = rowToRecord(row);
 
     record.completedAt = now;
 
-    // Record stream_completed event if not already recorded
     if (!streamHasEvent(record.id, "completed")) {
       recordEventWithDb(db, record.id, "completed", now);
     }
@@ -969,18 +926,11 @@ export function refreshStreamStatuses(): number {
   return result.changes;
 }
 
-/**
- * Archives completed streams older than 30 days.
- * Moves archived streams to stream_archive table and marks them in main table.
- * @async
- * @returns {Promise<number>} Number of streams archived
- */
 export async function archiveOldStreams(): Promise<number> {
   const db = getDb();
   const thirtyDaysAgo = nowInSeconds() - 30 * 24 * 60 * 60;
 
   try {
-    // Find completed streams older than 30 days that haven't been archived yet
     const streamsToArchive = db
       .prepare(
         `
@@ -1004,7 +954,6 @@ export async function archiveOldStreams(): Promise<number> {
         const record = rowToRecord(row);
         record.refundedAmount = row.refunded_amount ?? undefined;
 
-        // Insert into archive
         db.prepare(
           `
         INSERT INTO stream_archive (id, sender, recipient, asset_code, total_amount, duration_seconds, start_at, created_at, canceled_at, completed_at, refunded_amount, archived_at)
@@ -1025,7 +974,6 @@ export async function archiveOldStreams(): Promise<number> {
           now,
         );
 
-        // Mark as archived in main table
         db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, record.id);
         archived++;
       }
@@ -1039,23 +987,12 @@ export async function archiveOldStreams(): Promise<number> {
   }
 }
 
-/**
- * Builds the ORDER BY clause for a sort field and order direction.
- * Uses a whitelist of allowed column names to prevent SQL injection.
- */
 function buildOrderClause(sort: SortField, order: SortOrder): string {
   const column = SORT_COLUMNS[sort];
   const dir = order === "asc" ? "ASC" : "DESC";
   return `ORDER BY ${column} ${dir}`;
 }
 
-/**
- * Lists all streams from the database.
- * @param {boolean} [includeArchived=false] - Whether to include archived streams
- * @param {SortField} [sort="createdAt"] - Field to sort by
- * @param {SortOrder} [order="desc"] - Sort direction
- * @returns {StreamRecord[]} Array of stream records sorted by the specified field
- */
 export function listStreams(includeArchived = false, sort: SortField = "createdAt", order: SortOrder = "desc"): StreamRecord[] {
   const db = getDb();
   const orderClause = buildOrderClause(sort, order);
@@ -1066,13 +1003,6 @@ export function listStreams(includeArchived = false, sort: SortField = "createdA
   return rows.map(rowToRecord);
 }
 
-/**
- * Lists all streams where the given address is the recipient.
- * @param {string} recipientAddress - Stellar account address to filter by
- * @param {SortField} [sort="createdAt"] - Field to sort by
- * @param {SortOrder} [order="desc"] - Sort direction
- * @returns {StreamRecord[]} Array of stream records sorted by the specified field
- */
 export function listStreamsByRecipient(recipientAddress: string, sort: SortField = "createdAt", order: SortOrder = "desc"): StreamRecord[] {
   const db = getDb();
   const orderClause = buildOrderClause(sort, order);
@@ -1082,13 +1012,6 @@ export function listStreamsByRecipient(recipientAddress: string, sort: SortField
   return rows.map(rowToRecord);
 }
 
-/**
- * Lists all streams where the given address is the sender.
- * @param {string} senderAddress - Stellar account address to filter by
- * @param {SortField} [sort="createdAt"] - Field to sort by
- * @param {SortOrder} [order="desc"] - Sort direction
- * @returns {StreamRecord[]} Array of stream records sorted by the specified field
- */
 export function listStreamsBySender(senderAddress: string, sort: SortField = "createdAt", order: SortOrder = "desc"): StreamRecord[] {
   const db = getDb();
   const orderClause = buildOrderClause(sort, order);
@@ -1112,13 +1035,29 @@ export function getStream(id: string): StreamRecord | undefined {
 }
 
 /**
- * Cancels a stream and records the cancellation event.
- * Attempts to retrieve refund amount from on-chain cancel transaction.
- * Triggers webhook notification after successful cancellation.
- * @async
- * @param {string} id - Stream ID to cancel
- * @returns {Promise<StreamRecord | undefined>} The updated stream record, or undefined if not found
+ * Retrieves a single stream by ID with computed progress metrics.
+ * Returns null if the stream is not found.
+ * @param {string} id - Stream ID
+ * @returns {StreamWithProgress | null}
  */
+export function getStreamById(id: string): StreamWithProgress | null {
+  const db = getDb();
+  const row = db.prepare("SELECT * FROM streams WHERE id = ?").get(id) as StreamRow | undefined;
+
+  if (!row) {
+    return null;
+  }
+
+  const record = rowToRecord(row);
+  const progress = calculateProgress(record);
+
+  return {
+    ...record,
+    ...progress,
+    archived_at: row.archived_at,
+  };
+}
+
 export async function cancelStream(
   id: string,
 ): Promise<StreamRecord | undefined> {
@@ -1129,9 +1068,6 @@ export async function cancelStream(
 
   stream.canceledAt = nowInSeconds();
 
-  // Attempt to get refund amount from on-chain cancel transaction.
-  // For now, we extract from potential on-chain response. In production,
-  // this would send an actual cancel_stream transaction to the contract.
   try {
     const sorobanContext = getSorobanContext();
     if (sorobanContext && rpcServer && serverKeypair) {
@@ -1178,35 +1114,22 @@ export async function cancelStream(
     logger.warn({ err, streamId: id }, "failed to get refund amount from chain");
   }
 
-  // Invalidate cache
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
   resetStatsCache();
   resetStreamMetricsCache();
 
-  // Atomically write the updated stream row and the cancellation event.
   const db = getDb();
   db.transaction(() => {
     upsertStream(stream);
     recordEventWithDb(db, stream.id, "canceled", stream.canceledAt!, stream.sender);
   })();
 
-  // Webhook fires after the transaction commits.
   triggerWebhook("canceled", stream);
   return stream;
 }
 
-
-/**
- * Updates the start time of a scheduled stream.
- * Only scheduled streams (not yet started) can have their start time updated.
- * Records "start_time_updated" event.
- * @param {string} id - Stream ID
- * @param {number} newStartAt - New start time (Unix timestamp in seconds)
- * @returns {StreamRecord} The updated stream record
- * @throws {Error} If stream not found or not in scheduled state
- */
 export async function pauseStream(id: string): Promise<StreamRecord> {
   const stream = getStream(id);
   if (!stream) {
@@ -1229,7 +1152,6 @@ export async function pauseStream(id: string): Promise<StreamRecord> {
     recordEventWithDb(db, stream.id, "paused", stream.pausedAt!, stream.sender);
   })();
 
-  // Invalidate cache
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
@@ -1257,7 +1179,6 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
   const now = nowInSeconds();
   const elapsed = now - stream.pausedAt;
   stream.pausedDuration = (stream.pausedDuration ?? 0) + elapsed;
-  // Extend the effective duration so the recipient doesn't lose vesting time.  
   stream.durationSeconds += elapsed;
   stream.pausedAt = undefined;
 
@@ -1269,7 +1190,6 @@ export async function resumeStream(id: string): Promise<StreamRecord> {
     });
   })();
 
-  // Invalidate cache
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
@@ -1299,12 +1219,10 @@ export async function updateStreamStartAt(id: string,
     throw err;
   }
 
-  // Capture oldStartAt before mutating the record.
   const oldStartAt = stream.startAt;
   stream.startAt = newStartAt;
   const updatedAt = nowInSeconds();
 
-  // Atomically write the updated stream row and the start-time event.
   const db = getDb();
   db.transaction(() => {
     upsertStream(stream);
@@ -1319,7 +1237,6 @@ export async function updateStreamStartAt(id: string,
     );
   })();
 
-  // Invalidate cache
   await invalidateCache(`stream:${id}`);
   await invalidateCache("streams:list:");
   await invalidateCache("streams:export:");
@@ -1329,16 +1246,6 @@ export async function updateStreamStartAt(id: string,
   return stream;
 }
 
-
-/**
- * Soft-deletes a stream by setting archived_at timestamp.
- * This preserves the stream record for audit purposes.
- * @param {string} id - Stream ID to soft-delete
- * @returns {boolean} True if stream was archived, false if not found or already archived
- * Manually marks a fully-vested stream as completed.
- * Only callable when vestedAmount >= totalAmount.
- * Throws 400 if already completed/canceled or not fully vested.
- */
 export function markStreamComplete(id: string, at: number = nowInSeconds()): StreamRecord {
   const stream = getStream(id);
   if (!stream) {
@@ -1379,12 +1286,6 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
   return stream;
 }
 
-/**
- * Deletes a stream and all associated events from the database.
- * This is a hard delete and cannot be undone.
- * @param {string} id - Stream ID to delete
- * @returns {boolean} True if stream was deleted, false if not found
- */
 export function deleteStreamById(id: string): boolean {
   const db = getDb();
 
