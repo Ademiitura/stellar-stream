@@ -1,6 +1,7 @@
 #![cfg(test)]
-extern crate std;
+extern crate std
 use super::*;
+use crate::errors::ContractError;
 use soroban_sdk::{
     testutils::{Address as _, Events, Ledger},
     token, Env, IntoVal, Map, String, Symbol, Vec, symbol_short,
@@ -38,6 +39,70 @@ fn make_metadata(env: &Env) -> Map<String, String> {
 // ---------------------------------------------------------------------------
 // Existing stream-lifecycle tests (metadata = None)
 // ---------------------------------------------------------------------------
+
+#[test]
+fn test_claim_transfers_tokens_and_updates_balance() {
+    let env = Env::default();
+    env.mock_all_signatures();
+
+    // Register escrow contract
+    let contract_id = env.register_contract(None, EscrowVestingContract);
+    let client = EscrowVestingContractClient::new(&env, &contract_id);
+
+    // Setup mock admin, recipient, and SAC token
+    let admin = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract(token_admin.clone());
+    let token_client = token::Client::new(&env, &token_contract);
+    let token_admin_client = token::StellarAssetClient::new(&env, &token_contract);
+
+    // Mint tokens to escrow contract (simulate initial funding)
+    let vesting_amount: i128 = 10_000_000; // 10 XLM in stroops / base units
+    token_admin_client.mint(&contract_id, &vesting_amount);
+
+    // Verify initial balances
+    assert_eq!(token_client.balance(&contract_id), vesting_amount);
+    assert_eq!(token_client.balance(&recipient), 0);
+
+    // Setup contract storage state
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&Symbol::new(&env, "total_vested"), &vesting_amount);
+        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &0i128);
+    });
+
+    // Execute claim
+    let claimed = client.claim(&recipient, &token_contract);
+
+    // Assertions
+    assert_eq!(claimed, vesting_amount);
+    assert_eq!(token_client.balance(&recipient), vesting_amount);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+#[test]
+fn test_over_claim_reverts_with_insufficient_vested() {
+    let env = Env::default();
+    env.mock_all_signatures();
+
+    let contract_id = env.register_contract(None, EscrowVestingContract);
+    let client = EscrowVestingContractClient::new(&env, &contract_id);
+
+    let recipient = Address::generate(&env);
+    let token_admin = Address::generate(&env);
+    let token_contract = env.register_stellar_asset_contract(token_admin);
+
+    // Set storage where everything has already been claimed
+    env.as_contract(&contract_id, || {
+        env.storage().instance().set(&Symbol::new(&env, "total_vested"), &1000i128);
+        env.storage().instance().set(&Symbol::new(&env, "claimed_amount"), &1000i128);
+    });
+
+    // Attempting to claim again should revert with InsufficientVested
+    let res = client.try_claim(&recipient, &token_contract);
+    assert_eq!(res, Err(Ok(ContractError::InsufficientVested)));
+}
 
 #[test]
 fn test_get_next_stream_id() {
