@@ -821,6 +821,13 @@ describe("createStream", () => {
   beforeEach(() => {
     vi.resetModules();
     vi.clearAllMocks();
+describe("getStreamById", () => {
+  const frozenTime = Math.floor(Date.now() / 1000);
+
+  beforeEach(() => {
+    vi.resetModules();
+    vi.clearAllMocks();
+    vi.spyOn(Date, "now").mockReturnValue(frozenTime * 1000);
 
     mockState.nextId = 1;
     mockState.existingStreamIds = new Set<string>();
@@ -891,5 +898,127 @@ describe("createStream", () => {
     });
 
     expect(stream.id).toBe("42");
+  });
+});
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  function createGetDbMock(streamRow?: any) {
+    return {
+      prepare(sql: string) {
+        if (sql.includes("SELECT * FROM streams WHERE id = ?")) {
+          return {
+            get: (params: any) => {
+              const queryId = Array.isArray(params) ? params[0] : params;
+              return streamRow && streamRow.id === queryId ? streamRow : undefined;
+            },
+          };
+        }
+        return {
+          get: () => undefined,
+          all: () => [],
+          run: () => ({ changes: 0 }),
+        };
+      },
+    };
+  }
+
+  it("returns null for non-existent stream ID and does not throw", async () => {
+    const dbMock = createGetDbMock();
+    dbMocks.getDb.mockReturnValue(dbMock);
+
+    const { getStreamById } = await import("./streamStore");
+
+    expect(() => {
+      const result = getStreamById("non-existent-id");
+      expect(result).toBeNull();
+    }).not.toThrow();
+  });
+
+  it("returns full stream object with all computed progress fields for valid stream ID", async () => {
+    const now = frozenTime;
+    const mockRow = {
+      id: "stream-123",
+      sender: "GSENDER123",
+      recipient: "GRECIPIENT123",
+      asset_code: "USDC",
+      total_amount: 1000,
+      duration_seconds: 3600,
+      start_at: now - 1800,
+      created_at: now - 1800,
+      canceled_at: null,
+      completed_at: null,
+      refunded_amount: null,
+      archived_at: null,
+      paused_at: null,
+      paused_duration: 0,
+      cliff_seconds: 0,
+      metadata: JSON.stringify({ purpose: "testing" }),
+    };
+
+    const dbMock = createGetDbMock(mockRow);
+    dbMocks.getDb.mockReturnValue(dbMock);
+
+    const { getStreamById } = await import("./streamStore");
+    const result = getStreamById("stream-123");
+
+    expect(result).not.toBeNull();
+    expect(result).toMatchObject({
+      id: "stream-123",
+      sender: "GSENDER123",
+      recipient: "GRECIPIENT123",
+      assetCode: "USDC",
+      totalAmount: 1000,
+      durationSeconds: 3600,
+    });
+
+    // Verify all progress computation fields are present
+    expect(result).toHaveProperty("status");
+    expect(result).toHaveProperty("ratePerSecond");
+    expect(result).toHaveProperty("elapsedSeconds");
+    expect(result).toHaveProperty("vestedAmount");
+    expect(result).toHaveProperty("remainingAmount");
+    expect(result).toHaveProperty("percentComplete");
+
+    expect(result?.status).toBe("active");
+    expect(result?.percentComplete).toBe(50);
+    expect(result?.vestedAmount).toBe(500);
+  });
+
+  it("returns archived_at field populated for an archived stream", async () => {
+    const now = frozenTime;
+    const archivedTimestamp = now - 600;
+    const mockRow = {
+      id: "archived-stream-1",
+      sender: "GSENDER",
+      recipient: "GRECIPIENT",
+      asset_code: "XLM",
+      total_amount: 500,
+      duration_seconds: 1000,
+      start_at: now - 2000,
+      created_at: now - 2000,
+      canceled_at: null,
+      completed_at: now - 1000,
+      refunded_amount: null,
+      archived_at: archivedTimestamp,
+      paused_at: null,
+      paused_duration: 0,
+      cliff_seconds: 0,
+      metadata: null,
+    };
+
+    const dbMock = createGetDbMock(mockRow);
+    dbMocks.getDb.mockReturnValue(dbMock);
+
+    const { getStreamById } = await import("./streamStore");
+    const result = getStreamById("archived-stream-1");
+
+    expect(result).not.toBeNull();
+    expect(result?.archived_at).toBe(archivedTimestamp);
+    expect(result?.archived_at).not.toBeNull();
+    expect(result?.status).toBe("completed");
   });
 });
