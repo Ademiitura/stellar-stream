@@ -78,6 +78,13 @@ export class CircuitBreaker {
     }
   }
 
+  /** Resets the circuit breaker to CLOSED with zero failures. Intended for tests. */
+  public reset(): void {
+    this.failureCount = 0;
+    this.lastFailureTime = 0;
+    this.setState(CircuitState.CLOSED);
+  }
+
   private setState(newState: CircuitState): void {
     if (this.state !== newState) {
       logger.info({ from: this.state, to: newState }, "circuit breaker state changed");
@@ -221,6 +228,22 @@ export function stopIndexer(): void {
     indexerInterval = null;
     logger.info("event indexer stopped");
   }
+}
+
+/**
+ * Resets all module-level indexer state.
+ * Intended for use in tests only — allows each test to start with a clean slate
+ * without module-cache pollution from a previous `initIndexer` call.
+ * @internal
+ */
+export function resetIndexerState(): void {
+  rpcServer = null;
+  contractId = null;
+  networkPassphrase = Networks.TESTNET;
+  lastProcessedLedger = 0;
+  indexerInterval = null;
+  indexerStartLedger = null;
+  circuitBreaker.reset();
 }
 
 async function indexEvents(): Promise<void> {
@@ -394,7 +417,8 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "created",
           timestamp,
-          value.sender,
+          // actor == sender for Created events
+          value.actor ?? value.sender,
           value.total_amount,
           {
             recipient: value.recipient,
@@ -412,8 +436,22 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "claimed",
           timestamp,
-          value.recipient,
+          // actor == recipient for Claimed events
+          value.actor ?? value.recipient,
           value.amount,
+          { claimed_amount: value.claimed_amount },
+          event.ledger,
+        );
+        break;
+
+      case "Completed":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "completed",
+          timestamp,
+          value.actor,
+          value.total_amount,
           undefined,
           event.ledger,
         );
@@ -425,8 +463,9 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "canceled",
           timestamp,
-          value.sender,
-          undefined,
+          // actor == sender for Canceled events
+          value.actor ?? value.sender,
+          value.refunded_amount,
           undefined,
           event.ledger,
         );
@@ -438,9 +477,10 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "paused",
           timestamp,
-          value.sender,
+          // actor == sender for Paused events
+          value.actor ?? value.sender,
           undefined,
-          undefined,
+          { paused_at: value.paused_at },
           event.ledger,
         );
         break;
@@ -451,9 +491,10 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "resumed",
           timestamp,
-          value.sender,
+          // actor == sender for Resumed events
+          value.actor ?? value.sender,
           undefined,
-          undefined,
+          { resumed_at: value.resumed_at },
           event.ledger,
         );
         break;
@@ -464,11 +505,30 @@ function processEvent(db: any, event: rpc.Api.EventResponse): void {
           value.stream_id.toString(),
           "transferred",
           timestamp,
-          value.old_recipient,
+          // actor == old_recipient (the one who authorized the transfer)
+          value.actor ?? value.old_recipient,
           undefined,
           { new_recipient: value.new_recipient },
           event.ledger,
         );
+        break;
+
+      case "Clawback":
+        recordEventWithDb(
+          db,
+          value.stream_id.toString(),
+          "clawback",
+          timestamp,
+          // actor == admin address
+          value.actor,
+          value.amount,
+          { recipient: value.recipient },
+          event.ledger,
+        );
+        break;
+
+      default:
+        logger.warn({ eventName }, "unknown contract event type — skipped");
         break;
     }
   } catch (err) {

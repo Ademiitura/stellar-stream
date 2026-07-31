@@ -121,6 +121,17 @@ export interface ValidatedConfig {
 }
 
 export function validateEnv(): ValidatedConfig {
+  // Support backwards compatibility: map old variables to new ones if new ones are not set
+  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
+    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
+  }
+  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
+    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
+  }
+  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
+    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
+  }
+
   // Parse environment variables
   const parsed = envSchema.safeParse(process.env);
 
@@ -133,24 +144,8 @@ export function validateEnv(): ValidatedConfig {
     process.exit(1);
     throw new Error("Environment validation failed"); // Ensure execution stops in tests
   }
-  if (norm === "public" || norm === "mainnet" || norm === "public global stellar network ; october 2015") {
-    return "Public Global Stellar Network ; October 2015";
-  }
-  return network;
-}
 
-export function validateEnv(): ValidatedConfig {
-  // Support backwards compatibility: map old variables to new ones if new ones are not set
-  if (!process.env.STELLAR_CONTRACT_ID && process.env.CONTRACT_ID) {
-    process.env.STELLAR_CONTRACT_ID = process.env.CONTRACT_ID;
-  }
-  if (!process.env.SOROBAN_RPC_URL && process.env.RPC_URL) {
-    process.env.SOROBAN_RPC_URL = process.env.RPC_URL;
-  }
-  if (!process.env.STELLAR_NETWORK && process.env.NETWORK_PASSPHRASE) {
-    process.env.STELLAR_NETWORK = process.env.NETWORK_PASSPHRASE;
-  }
-
+  const env = parsed.data;
   const isProduction = process.env.NODE_ENV === "production";
   const sorobanDisabled = process.env.SOROBAN_DISABLED?.toLowerCase() === "true";
 
@@ -256,7 +251,6 @@ export function validateEnv(): ValidatedConfig {
 
   // Validate ADMIN_API_KEY if provided
   let adminApiKey: string | null = null;
-  const isProduction = process.env.NODE_ENV === "production";
 
   if (process.env.ADMIN_API_KEY) {
     const adminKeyValidation = adminApiKeySchema.safeParse(process.env.ADMIN_API_KEY);
