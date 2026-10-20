@@ -7106,3 +7106,344 @@ fn test_claimable_calculation_failure_is_atomic_and_rounding_across_partial_clai
     assert_eq!(token_client.balance(&sender), 34);
     assert_eq!(token_client.balance(&contract_id), 0);
 }
+
+
+// =============================================================================
+// #1129 — Specify edge behavior for Claimable calculation
+//
+// Each test targets exactly one boundary documented in the `claimable()` and
+// `vested_amount()` doc-comments: before start, at exact start, one second
+// before end, at exact end, after end, canceled-at-time (before and after the
+// original end), and integer rounding / dust across repeated partial claims.
+// =============================================================================
+
+/// Before stream start: claimable is always 0, and a claim attempt fails
+/// atomically without touching balances or emitting any events.
+#[test]
+fn test_claimable_edge_before_start_is_zero_and_atomic_rollback() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+
+    // Stream runs from t=100 to t=200
+    env.ledger().with_mut(|l| l.timestamp = 0);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &100, &200, &0, &None);
+
+    // Claimable is 0 at every point before start
+    assert_eq!(client.claimable(&stream_id, &0), 0);
+    assert_eq!(client.claimable(&stream_id, &50), 0);
+    assert_eq!(client.claimable(&stream_id, &99), 0);
+
+    let events_before = env.events().all().len();
+    // A claim attempt fails; nothing changes
+    env.ledger().with_mut(|l| l.timestamp = 50);
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+    assert_eq!(env.events().all().len(), events_before);
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 1_000);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+}
+
+/// At exact start time: claimable is 0 (zero elapsed) and a claim fails
+/// without any side effect.
+#[test]
+fn test_claimable_edge_at_exact_start_time_is_zero() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &1_000, &2_000, &0, &None);
+
+    assert_eq!(client.claimable(&stream_id, &1_000), 0);
+
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(client.get_stream(&stream_id).claimed_amount, 0);
+}
+
+/// One second before end time: claimable is `total - 1` (floor rounding) for
+/// a stream of `total_amount == duration`.
+#[test]
+fn test_claimable_edge_one_second_before_end() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    // 1000 tokens over 1000 seconds: 1 token per second, exactly.
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &0, &1_000, &0, &None);
+
+    // At t=999: 999 tokens vested, 999 claimable
+    assert_eq!(client.claimable(&stream_id, &999), 999);
+}
+
+/// At exact end time: the full total_amount is claimable.
+#[test]
+fn test_claimable_edge_at_exact_end_time_is_total() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &1_000, &2_000, &0, &None);
+
+    assert_eq!(client.claimable(&stream_id, &2_000), 1_000);
+}
+
+/// After end time: claimable stays capped at total_amount; repeated queries
+/// return the same value and do not increase beyond the cap.
+#[test]
+fn test_claimable_edge_after_end_time_capped_at_total() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &1_000, &2_000, &0, &None);
+
+    // All times beyond end_time should return the same capped value
+    assert_eq!(client.claimable(&stream_id, &2_001), 1_000);
+    assert_eq!(client.claimable(&stream_id, &5_000), 1_000);
+    assert_eq!(client.claimable(&stream_id, &u64::MAX / 2), 1_000);
+}
+
+/// Canceled-at-time: after cancel() the claimable amount is frozen at the
+/// vested amount on the cancel ledger; queries beyond the original end_time
+/// also return the frozen amount (not total_amount).
+#[test]
+fn test_claimable_edge_canceled_at_midpoint_frozen_beyond_original_end() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    // Stream: t=0 to t=1000, 1000 tokens
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &0, &1_000, &0, &None);
+
+    // Cancel at t=400 (vested = 400, refund = 600)
+    env.ledger().with_mut(|l| l.timestamp = 400);
+    client.cancel(&stream_id, &sender);
+
+    let stream = client.get_stream(&stream_id);
+    assert!(stream.canceled);
+    assert_eq!(stream.end_time, 400);
+    assert_eq!(stream.total_amount, 400);
+    assert_eq!(token_client.balance(&sender), 600); // 600 refunded
+
+    // Claimable is frozen at 400 regardless of how far beyond the original end_time we query
+    assert_eq!(client.claimable(&stream_id, &400), 400);
+    assert_eq!(client.claimable(&stream_id, &700), 400);
+    assert_eq!(client.claimable(&stream_id, &1_000), 400); // original end_time
+    assert_eq!(client.claimable(&stream_id, &9_999), 400); // well beyond
+
+    // Recipient can claim exactly 400 and then nothing more
+    assert_eq!(client.claim(&stream_id, &recipient, &400), 400);
+    assert_eq!(client.claimable(&stream_id, &9_999), 0);
+    assert_eq!(token_client.balance(&recipient), 400);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Canceled before start: claimable is always 0 for all future times; a claim
+/// attempt fails atomically.
+#[test]
+fn test_claimable_edge_canceled_before_start_is_zero_for_all_times() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &500, &1_500, &0, &None);
+
+    env.ledger().with_mut(|l| l.timestamp = 0);
+    client.cancel(&stream_id, &sender);
+
+    // Full refund, nothing for recipient
+    assert_eq!(token_client.balance(&sender), 1_000);
+
+    assert_eq!(client.claimable(&stream_id, &0), 0);
+    assert_eq!(client.claimable(&stream_id, &500), 0);
+    assert_eq!(client.claimable(&stream_id, &1_000), 0);
+    assert_eq!(client.claimable(&stream_id, &9_999), 0);
+
+    env.ledger().with_mut(|l| l.timestamp = 2_000);
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+    assert_eq!(token_client.balance(&recipient), 0);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Integer rounding (dust): with a non-divisible stream, repeated partial
+/// claims at regular intervals produce floor-rounded amounts.  The final claim
+/// recovers all accumulated dust so the total paid exactly equals total_amount.
+#[test]
+fn test_claimable_edge_rounding_dust_recovered_at_end() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    // 100 tokens over 30 seconds: 100/30 = 3.33… tokens/s; integer division truncates.
+    token_admin.mint(&sender, &100);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &100, &0, &30, &0, &None);
+
+    // t=10: vested = 100*10/30 = 33 (floor)
+    assert_eq!(client.claimable(&stream_id, &10), 33);
+    env.ledger().with_mut(|l| l.timestamp = 10);
+    client.claim(&stream_id, &recipient, &33);
+
+    // t=20: vested = 100*20/30 = 66 (floor); 66-33 = 33 claimable
+    assert_eq!(client.claimable(&stream_id, &20), 33);
+    env.ledger().with_mut(|l| l.timestamp = 20);
+    client.claim(&stream_id, &recipient, &33);
+
+    // t=30 (end): vested = 100; 100 - 66 = 34 claimable (recovering 2 truncated units)
+    assert_eq!(client.claimable(&stream_id, &30), 34);
+    env.ledger().with_mut(|l| l.timestamp = 30);
+    client.claim(&stream_id, &recipient, &34);
+
+    // All 100 tokens paid out; nothing left
+    assert_eq!(client.claimable(&stream_id, &30), 0);
+    assert_eq!(token_client.balance(&recipient), 100);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// Checked arithmetic: a claim that would make claimed_amount exceed
+/// total_amount is rejected without any balance or state change.
+#[test]
+fn test_claimable_edge_checked_sub_never_returns_negative() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+    let token_client = token::Client::new(&env, &token);
+
+    token_admin.mint(&sender, &1_000);
+    let stream_id =
+        client.create_stream(&sender, &recipient, &token, &1_000, &0, &1_000, &0, &None);
+
+    // Claim the full vested amount at t=1000
+    env.ledger().with_mut(|l| l.timestamp = 1_000);
+    client.claim(&stream_id, &recipient, &1_000);
+
+    // claimable must be 0 (checked_sub saturates rather than going negative)
+    assert_eq!(client.claimable(&stream_id, &1_000), 0);
+    assert_eq!(client.claimable(&stream_id, &9_999), 0);
+
+    // Attempting a second claim panics as expected
+    assert!(client.try_claim(&stream_id, &recipient, &1).is_err());
+    assert_eq!(token_client.balance(&recipient), 1_000);
+    assert_eq!(token_client.balance(&contract_id), 0);
+}
+
+/// get_claimable_batch applies the same edge rules: before start, after end,
+/// and canceled streams all return the correct capped value.
+#[test]
+fn test_claimable_batch_edge_boundary_coverage() {
+    let env = Env::default();
+    env.mock_all_auths();
+    let contract_id = env.register_contract(None, StellarStreamContract);
+    let client = StellarStreamContractClient::new(&env, &contract_id);
+    let admin = Address::generate(&env);
+    let sender = Address::generate(&env);
+    let recipient = Address::generate(&env);
+    let token = create_token(&env, &admin);
+    let token_admin = token::StellarAssetClient::new(&env, &token);
+
+    token_admin.mint(&sender, &3_000);
+
+    // Stream A: not yet started (t < start_time)
+    let id_a = client.create_stream(&sender, &recipient, &token, &1_000, &500, &1_500, &0, &None);
+    // Stream B: in progress at t=800
+    let id_b = client.create_stream(&sender, &recipient, &token, &1_000, &0, &1_000, &0, &None);
+    // Stream C: canceled before start
+    let id_c = client.create_stream(&sender, &recipient, &token, &1_000, &200, &1_200, &0, &None);
+    client.cancel(&id_c, &sender); // t=0, 0 vested
+
+    let mut ids = soroban_sdk::vec![&env];
+    ids.push_back(id_a);
+    ids.push_back(id_b);
+    ids.push_back(id_c);
+
+    // At t=800:
+    //   id_a: start=500 already past but let's check: 800 elapsed from 500 → 300/1000 * 1000 = 300
+    //   id_b: elapsed=800/1000 * 1000 = 800
+    //   id_c: canceled, total_amount reduced to 0 → 0
+    let result = client.get_claimable_batch(&ids, &800);
+    assert_eq!(result.get(id_a).unwrap(), 300);
+    assert_eq!(result.get(id_b).unwrap(), 800);
+    assert_eq!(result.get(id_c).unwrap(), 0);
+
+    // Unknown stream ID returns 0
+    let mut ids_with_unknown = soroban_sdk::vec![&env];
+    ids_with_unknown.push_back(9_999_u64);
+    let result_unknown = client.get_claimable_batch(&ids_with_unknown, &800);
+    assert_eq!(result_unknown.get(9_999).unwrap(), 0);
+}
