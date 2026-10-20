@@ -1728,9 +1728,21 @@ app.post(
         return;
       }
 
-      const history = await import("./services/eventHistory").then((m) =>
-        m.getStreamHistory(stream.id),
-      );
+      let history: ReturnType<typeof getStreamHistory> = [];
+      try {
+        const eventHistoryModule = await import("./services/eventHistory");
+        try {
+          history = eventHistoryModule.getStreamHistory(stream.id);
+        } catch {
+          history = eventHistoryModule.getStreamHistory(stream.id);
+        }
+      } catch (historyError) {
+        logger.warn(
+          { err: historyError, streamId: stream.id },
+          "history read failed independently after claim commit; returning empty history without rolling back claim",
+        );
+        history = [];
+      }
 
       res.json({
         result: {
@@ -1835,6 +1847,15 @@ app.patch(
   },
 );
 
+function readHistoryWithRetry<T>(operation: () => T): T {
+  try {
+    return operation();
+  } catch {
+    // Read-only retry: safe against duplicating events, money-moving effects, or stored state
+    return operation();
+  }
+}
+
 app.get(
   "/api/streams/:id/history",
   readLimiter,
@@ -1857,13 +1878,36 @@ app.get(
       Math.max(1, parseInt(req.query.pageSize as string) || 20),
       100,
     );
+    const orderParam = req.query.order === "asc" ? "asc" : undefined;
 
-    const total = countStreamEvents(parsedId.value);
-    const offset = (page - 1) * pageSize;
-    const data = getStreamHistory(parsedId.value, pageSize, offset);
-    const hasMore = offset + pageSize < total;
+    try {
+      const total = readHistoryWithRetry(() => countStreamEvents(parsedId.value));
+      const offset = (page - 1) * pageSize;
+      const data = readHistoryWithRetry(() =>
+        orderParam
+          ? getStreamHistory(parsedId.value, pageSize, offset, orderParam)
+          : getStreamHistory(parsedId.value, pageSize, offset),
+      );
+      const hasMore = offset + pageSize < total;
 
-    res.json({ data, total, page, pageSize, hasMore });
+      res.json({ data, total, page, pageSize, hasMore });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream history",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
@@ -1883,7 +1927,28 @@ app.get(
       return;
     }
 
-    res.json({ data: getStreamEventSummary(parsedId.value) });
+    try {
+      const summary = readHistoryWithRetry(() =>
+        getStreamEventSummary(parsedId.value),
+      );
+      res.json({ data: summary });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream history summary",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history summary.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
@@ -1904,17 +1969,37 @@ app.get(
     }
 
     const progress = calculateProgress(stream);
-    const history = getStreamHistory(parsedId.value, 50, 0, 'asc');
+    try {
+      const history = readHistoryWithRetry(() =>
+        getStreamHistory(parsedId.value, 50, 0, "asc"),
+      );
 
-    res.json({
-      data: {
-        stream: {
-          ...stream,
-          progress,
+      res.json({
+        data: {
+          stream: {
+            ...stream,
+            progress,
+          },
+          history,
         },
-        history,
-      },
-    });
+      });
+    } catch (error: unknown) {
+      logger.error(
+        { err: error, streamId: parsedId.value },
+        "failed to read stream snapshot history",
+      );
+      const normalizedError = normalizeUnknownApiError(
+        error,
+        "Failed to fetch stream history.",
+      );
+      sendApiError(
+        req,
+        res,
+        normalizedError.statusCode,
+        normalizedError.message,
+        { code: normalizedError.code ?? "HISTORY_READ_FAILED" },
+      );
+    }
   },
 );
 
