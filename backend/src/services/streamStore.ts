@@ -15,7 +15,7 @@ import pLimit from "p-limit";
 import { initDb, getDb, syncFtsIndex } from "./db";
 import { recordEventWithDb, getClaimedTotal, streamHasEvent } from "./eventHistory";
 import { triggerWebhook } from "./webhook";
-import { initCache, getCache } from "./cache";
+import { initCache, getCache, invalidateCacheSync } from "./cache";
 import { resetStatsCache } from "./stats";
 import { resetStreamMetricsCache } from "./streamMetrics";
 import { logger } from "../logger";
@@ -1386,6 +1386,10 @@ export function markStreamComplete(id: string, at: number = nowInSeconds()): Str
   })();
 
   triggerWebhook("completed", stream);
+  // SSB-2026-108: keep list results consistent with committed state.
+  invalidateCacheSync(`stream:${stream.id}`);
+  invalidateCacheSync("streams:list:");
+  invalidateCacheSync("streams:export:");
 
   return stream;
 }
@@ -1404,5 +1408,9 @@ export function deleteStreamById(id: string): boolean {
   const now = nowInSeconds();
   db.prepare("UPDATE streams SET archived_at = ? WHERE id = ?").run(now, id);
 
+  // SSB-2026-108: keep list results consistent with committed state.
+  invalidateCacheSync(`stream:${id}`);
+  invalidateCacheSync("streams:list:");
+  invalidateCacheSync("streams:export:");
   return true;
 }
