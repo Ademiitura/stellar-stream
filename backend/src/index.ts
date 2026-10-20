@@ -999,6 +999,66 @@ app.get(
   },
 );
 
+function isDatabaseTimeoutError(error: unknown): boolean {
+  if (!error || typeof error !== "object") return false;
+  const candidate = error as { code?: unknown; message?: unknown };
+  const code = typeof candidate.code === "string" ? candidate.code.toUpperCase() : "";
+  const message = typeof candidate.message === "string" ? candidate.message : "";
+  return (
+    code === "SQLITE_BUSY" ||
+    code === "SQLITE_LOCKED" ||
+    code === "ETIMEDOUT" ||
+    code === "QUERY_TIMEOUT" ||
+    code === "DATABASE_TIMEOUT" ||
+    /timeout|timed out|database is locked|sqlite_busy/i.test(message)
+  );
+}
+
+function queryRecipientStreamsWithRetry(
+  recipientAddress: string,
+  sort: "totalAmount" | "startAt" | "createdAt" | "durationSeconds",
+  order: "asc" | "desc",
+): StreamRecord[] {
+  try {
+    return listStreamsByRecipient(recipientAddress, sort, order);
+  } catch (error) {
+    if (isDatabaseTimeoutError(error)) {
+      // Read-only retry on transient database timeout/lock: never duplicates state or events
+      return listStreamsByRecipient(recipientAddress, sort, order);
+    }
+    throw error;
+  }
+}
+
+function sendRecipientStreamsQueryError(
+  req: Request,
+  res: Response,
+  accountId: string,
+  error: unknown,
+) {
+  logger.error({ err: error, accountId }, "failed to query recipient streams");
+  if (isDatabaseTimeoutError(error)) {
+    const normalized = normalizeUnknownApiError(
+      error,
+      "Database query timed out while fetching recipient streams.",
+    );
+    return sendApiError(req, res, 503, normalized.message, {
+      code: "DATABASE_TIMEOUT",
+    });
+  }
+  const normalizedError = normalizeUnknownApiError(
+    error,
+    "Failed to fetch recipient streams.",
+  );
+  return sendApiError(
+    req,
+    res,
+    normalizedError.statusCode,
+    normalizedError.message,
+    { code: normalizedError.code ?? "INTERNAL_ERROR" },
+  );
+}
+
 app.get(
   "/api/streams/recipient/:address",
   readLimiter,
@@ -1021,10 +1081,21 @@ app.get(
     }
     const query = parsedQuery.data;
 
-    const rawStreams = await withAddressCache(
-      `streams:recipient:${address}`,
-      () => listStreamsByRecipient(address, query.sort ?? "createdAt", query.order ?? "desc"),
-    );
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = await withAddressCache(
+        `streams:recipient:${address}`,
+        () =>
+          queryRecipientStreamsWithRetry(
+            address,
+            query.sort ?? "createdAt",
+            query.order ?? "desc",
+          ),
+      );
+    } catch (error: unknown) {
+      sendRecipientStreamsQueryError(req, res, address, error);
+      return;
+    }
 
     const now = nowInSeconds();
     let data = rawStreams.map((stream) => ({
@@ -1187,8 +1258,20 @@ app.get(
     }
     const query = parsedQuery.data;
 
+    let rawStreams: StreamRecord[];
+    try {
+      rawStreams = queryRecipientStreamsWithRetry(
+        accountId,
+        query.sort ?? "createdAt",
+        query.order ?? "desc",
+      );
+    } catch (error: unknown) {
+      sendRecipientStreamsQueryError(req, res, accountId, error);
+      return;
+    }
+
     const now = nowInSeconds();
-    let data = listStreamsByRecipient(accountId, query.sort ?? "createdAt", query.order ?? "desc").map((stream) => ({
+    let data = rawStreams.map((stream) => ({
       ...stream,
       progress: calculateProgress(stream, now),
     }));
