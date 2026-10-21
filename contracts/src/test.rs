@@ -7245,7 +7245,7 @@ fn test_claimable_edge_after_end_time_capped_at_total() {
     // All times beyond end_time should return the same capped value
     assert_eq!(client.claimable(&stream_id, &2_001), 1_000);
     assert_eq!(client.claimable(&stream_id, &5_000), 1_000);
-    assert_eq!(client.claimable(&stream_id, &u64::MAX / 2), 1_000);
+    assert_eq!(client.claimable(&stream_id, &(u64::MAX / 2)), 1_000);
 }
 
 /// Canceled-at-time: after cancel() the claimable amount is frozen at the
