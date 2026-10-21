@@ -7800,3 +7800,118 @@ fn test_1133_claim_requires_recipient_authorization() {
     assert_eq!(f.token.balance(&f.contract_id), 900);
     assert_eq!(f.stream().claimed_amount, 100);
 }
+
+#[test]
+fn test_1138_one_unit_claim_then_remaining_claim() {
+    let env = Env::default();
+    let f = reg_fixture(&env, 1_000, 1_000, 2_000);
+
+    // t=1_500: 500 of 1_000 have vested.
+    f.set_time(1_500);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 500);
+
+    // One-unit claim: the recipient authorizes and is paid exactly 1.
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert!(env.auths().iter().any(|(who, _)| *who == f.recipient));
+    let stream = f.stream();
+    assert_eq!(stream.claimed_amount, 1);
+    assert_eq!(stream.last_claim_time, 1_500);
+    assert_eq!(f.token.balance(&f.recipient), 1);
+    assert_eq!(f.token.balance(&f.contract_id), 999);
+    let first: StreamClaimed = f.last_event(symbol_short!("Claimed")).into_val(f.env);
+    assert_eq!(first.stream_id, f.stream_id);
+    assert_eq!(first.actor, f.recipient);
+    assert_eq!(first.recipient, f.recipient);
+    assert_eq!(first.amount, 1);
+    assert_eq!(first.claimed_amount, 1);
+    assert_eq!(first.timestamp, 1_500);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 0);
+
+    // 499 is left at this instant; asking for 500 reverts and changes nothing.
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 499);
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &500)
+        .is_err());
+    assert_eq!(f.stream().claimed_amount, 1);
+    assert_eq!(f.token.balance(&f.recipient), 1);
+    assert_eq!(f.token.balance(&f.contract_id), 999);
+
+    // Remaining claim.
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &499), 499);
+    assert_eq!(f.token.balance(&f.recipient), 500);
+    assert_eq!(f.token.balance(&f.contract_id), 500);
+    let second: StreamClaimed = f.last_event(symbol_short!("Claimed")).into_val(f.env);
+    assert_eq!(second.amount, 499);
+    assert_eq!(second.claimed_amount, 500);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 0);
+
+    // At the end the rest vests; claiming it completes the stream.
+    f.set_time(2_000);
+    assert_eq!(f.client.claimable(&f.stream_id, &2_000), 500);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &500), 500);
+    assert_eq!(f.token.balance(&f.recipient), 1_000);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    let done: StreamCompleted = f.last_event(symbol_short!("Completed")).into_val(f.env);
+    assert_eq!(done.total_amount, 1_000);
+    assert_eq!(done.actor, f.recipient);
+    assert_eq!(done.timestamp, 2_000);
+    assert_eq!(
+        f.last_two_kinds(),
+        (symbol_short!("Claimed"), symbol_short!("Completed"))
+    );
+}
+
+#[test]
+fn test_1138_transfer_failure_after_authorization_rolls_back() {
+    let env = Env::default();
+    let f = reg_fixture(&env, 1_000, 1_000, 2_000);
+
+    // One-unit claim goes through at t=1_200.
+    f.set_time(1_200);
+    f.sign_claim(&f.recipient, 1);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &1), 1);
+    assert_eq!(f.token.balance(&f.recipient), 1);
+
+    // Drain the escrow so the next payout transfer fails.
+    env.mock_all_auths();
+    let sink = Address::generate(&env);
+    env.as_contract(&f.contract_id, || {
+        f.token.transfer(&f.contract_id, &sink, &999);
+    });
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+
+    // t=1_500: 499 is claimable and the recipient signs, but the transfer fails.
+    f.set_time(1_500);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 499);
+    f.sign_claim(&f.recipient, 499);
+    assert!(f
+        .client
+        .try_claim(&f.stream_id, &f.recipient, &499)
+        .is_err());
+
+    // Rollback: stream state, balances and events are exactly as before.
+    let stream = f.stream();
+    assert_eq!(stream.claimed_amount, 1);
+    assert_eq!(stream.last_claim_time, 1_200);
+    assert_eq!(f.token.balance(&f.recipient), 1);
+    assert_eq!(f.token.balance(&f.contract_id), 0);
+    assert_eq!(f.count_events(symbol_short!("Claimed")), 1);
+    assert_eq!(f.count_events(symbol_short!("Completed")), 0);
+    assert_eq!(f.client.claimable(&f.stream_id, &1_500), 499);
+
+    // Refill the escrow: the same signed claim now succeeds, so the failure
+    // was the transfer and not authorization or validation.
+    env.mock_all_auths();
+    token::StellarAssetClient::new(&env, &f.token.address).mint(&f.contract_id, &999);
+    f.sign_claim(&f.recipient, 499);
+    assert_eq!(f.client.claim(&f.stream_id, &f.recipient, &499), 499);
+    let stream = f.stream();
+    assert_eq!(stream.claimed_amount, 500);
+    assert_eq!(stream.last_claim_time, 1_500);
+    assert_eq!(f.token.balance(&f.recipient), 500);
+    assert_eq!(f.token.balance(&f.contract_id), 500);
+    let ev: StreamClaimed = f.last_event(symbol_short!("Claimed")).into_val(f.env);
+    assert_eq!(ev.amount, 499);
+    assert_eq!(ev.claimed_amount, 500);
+}
