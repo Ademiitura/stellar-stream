@@ -254,7 +254,7 @@ describe('CreateStreamForm Component', () => {
     // First confirmation — should fail
     fireEvent.click(confirmButton);
 
-    expect(await screen.findByRole('alert')).toHaveTextContent('Insufficient balance');
+    expect(await screen.findByRole('alert')).toHaveTextContent(/insufficient balance/i);
     expect(onCreate).toHaveBeenCalledTimes(1);
 
     // Click "Retry Confirmation"

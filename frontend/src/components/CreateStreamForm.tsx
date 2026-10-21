@@ -58,6 +58,12 @@ function humaniseApiError(raw: string): { title: string; hint: string } {
       hint: raw,
     };
   }
+  if (lower.includes("insufficient") || lower.includes("balance")) {
+    return {
+      title: "Insufficient or stale balance",
+      hint: "The sender's balance may be stale or too low. Refresh your wallet, confirm the available balance, and try again.",
+    };
+  }
   if (lower.includes("amount")) {
     return {
       title: "Invalid amount",
